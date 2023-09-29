@@ -16,7 +16,6 @@ DIMS = {
     "33Mx2": 1024,
 }
 
-
 COLOURS = {
     "1Mx8": "#1f77b4",
     "3Mx8": "#ff7f0e",
@@ -26,6 +25,16 @@ COLOURS = {
     "21Mx1": "#8c564b",
     "33Mx2": "#e377c2",
     # "12b": "#7f7f7f",
+}
+
+HUB_NAMES = {
+    "1Mx8": "1M",
+    "3Mx8": "3M",
+    "8Mx8": "8M",
+    "28Mx8": "28M",
+    "33Mx4": "33M",
+    "21Mx1": "1Layer-21M",
+    "33Mx2": "2Layers-33M",
 }
 
 
@@ -39,21 +48,14 @@ def get_hub_name(name: str, instruct: bool = False):
     return f"roneneldan/TinyStories-{name}"
 
 
-sort_by_params = lambda x: numerate(get_model_size(x), "m")
+sort_by_params = lambda x: numerate(x, "m")
 sort_by_dim = lambda x: DIMS[x]
 
 
-def get_model_size(iden: str) -> Tuple[int, str]:
-    size = iden.split("-")[0]
-    assert size in DIMS
-
-    return size
-
-
 def get_model_colour(iden: str) -> str:
-    size = iden.split("-")[0]
-    if size in COLOURS:
-        return COLOURS[size]
+    iden = iden.split("-")[0]
+    if iden in COLOURS:
+        return COLOURS[iden]
 
     return "#000000"
 
@@ -79,7 +81,7 @@ def set_model_args(parser: ArgumentParser):
 
 def get_model(args: Namespace) -> Tuple[AutoModelForCausalLM, int, int]:
     model = AutoModelForCausalLM.from_pretrained(
-        get_hub_name(args.model_size),
+        f"roneneldan/TinyStories-{HUB_NAMES[args.model_size]}",
         cache_dir=args.model_cache,
         torch_dtype=DTYPES[args.model_dtype],
     )
