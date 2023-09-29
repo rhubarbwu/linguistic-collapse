@@ -1,0 +1,7 @@
+datasets
+h5py
+optimum
+scikit-learn
+torch
+tqdm
+transformers
