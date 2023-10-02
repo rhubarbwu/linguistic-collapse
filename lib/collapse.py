@@ -103,7 +103,8 @@ class Statistics:
         Y (B x 1): class labels
         """
 
-        self.compute_means()
+        idxs = self.counts_in_range()
+        means, mean_G = self.compute_means(idxs)
 
         assert X.shape[-1] == self.D
         assert X.shape[0] == Y.shape[0]
@@ -115,10 +116,10 @@ class Statistics:
         self.N2 += Y.shape[0]
         self.N2_seqs += B
 
-        mean_diff = self.means[Y] - self.mean_G  # C x D
+        mean_diff = means[Y] - mean_G  # C' x D
         self.sum_between += torch.matmul(mean_diff.mT, mean_diff)  # D x D
 
-        diff = X.to(self.device) - self.means[Y]  # N x D
+        diff = X.to(self.device) - means[Y]  # N x D
         self.sum_within += torch.matmul(diff.mT, diff)  # D x D
 
         return self.sum_between, self.sum_within

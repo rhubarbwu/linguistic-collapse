@@ -150,6 +150,9 @@ for iden in sorted(DIMS, key=model_sorter):
         analytics["coh_std"] = triu_vals.std().cpu()
         del triu_vals
 
+    if args.inv_snr:
+        analytics["inv_snr"] = collected.inv_snr()
+
     if analytics:
         ANALYTICS[iden] = analytics
 
@@ -258,15 +261,14 @@ if args.eigenvalues:
 if args.norms:
     plot_statistic("Norms of Means (stddev/mean)", "norms_cv")
     plot_arrays("Norms of Means (Histogram)", "norms_hist")
-
     for iden in sorted(ANALYTICS.keys(), key=model_sorter):
         plot_freqs_norms(iden)
     plot_freqs_norms()
-
 if args.coherence:
     plot_statistic("Coherence (mean)", "coh_mean")
     plot_statistic("Coherence (stddev)", "coh_std")
     plot_arrays("Interference of Means", "coh_hist", "Values (Off-Diagonals)")
-
+if args.inv_snr:
+    plot_statistic("Inverse Signal-to-Noise Ratio", "inv_snr")
 
 print(LINE_SEP)
