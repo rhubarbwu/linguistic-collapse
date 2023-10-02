@@ -1,5 +1,6 @@
 datasets
 h5py
+matplotlib
 optimum
 scikit-learn
 torch

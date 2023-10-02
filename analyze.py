@@ -4,10 +4,11 @@ from os import makedirs
 import torch
 
 from lib.collapse import Statistics
-from lib.model import DIMS, get_model_colour, sort_by_dim, sort_by_params
+from lib.model import (DIMS, get_classifier_weights, get_model_colour,
+                       sort_by_dim, sort_by_params)
 from lib.statistics import collect_hist
 from lib.utils import identify, inner_product
-from lib.visualization import TOO_BIG, plot_graph, plot_histogram
+from lib.visualization import TOO_BIG, plot_graph, plot_histogram, set_vis_args
 
 LINE_SEP = "-" * 79
 
@@ -23,7 +24,6 @@ parser.add_argument(
 )
 
 parser.add_argument("-i", "--input_files", type=str, nargs="+", default=[])
-parser.add_argument("-o", "--output_dir", type=str, default="figures")
 parser.add_argument("-mc", "--model_cache", type=str, default=".")
 
 parser.add_argument("-prog", "--progress", action="store_true")
@@ -34,20 +34,12 @@ parser.add_argument("-dual", "--duality", action="store_true")
 parser.add_argument("-snr", "--inv_snr", action="store_true")
 parser.add_argument("-all", "--analysis", action="store_true")
 
-
 parser.add_argument("-k", "--n_clusters", type=int, default=1)
 parser.add_argument("-mpc", "--min_per_class", type=int, default=1)
 parser.add_argument("-Mpc", "--max_per_class", type=int, default=None)
 parser.add_argument("-ps", "--patch_size", type=int, default=1024)
 
-
-parser.add_argument("-fmt", "--fig_format", type=str, default="png")
-parser.add_argument("-fs", "--fig_size", type=int, nargs=2, default=(9, 6))
-parser.add_argument("-mag", "--magnitude", type=str, default="m")
-parser.add_argument("-nb", "--num_bins", type=int, default=1024)
-parser.add_argument("-sort", "--sort_by", type=str, default="params")
-parser.add_argument("-xs", "--xscale", type=str, default="linear")
-parser.add_argument("-ys", "--yscale", type=str, default="linear")
+set_vis_args(parser)
 args = parser.parse_args()
 
 
@@ -148,7 +140,14 @@ for iden in sorted(DIMS, key=model_sorter):
         analytics["coh_hist"] = (hist, edges)
         analytics["coh_mean"] = triu_vals.mean().cpu()
         analytics["coh_std"] = triu_vals.std().cpu()
+        analytics["coh_cv"] = analytics["coh_std"] / analytics["coh_mean"]
         del triu_vals
+
+    if args.duality:
+        args.model_size = iden
+        W = get_classifier_weights(args)
+        analytics["duality"] = collected.self_duality(W, indices, args.n_clusters)
+        del W
 
     if args.inv_snr:
         analytics["inv_snr"] = collected.inv_snr()
@@ -183,7 +182,6 @@ def plot_statistic(measure: str, key: str):
     ax.scatter(nums, vals, marker="o", label="TinyStories")  # plot of scatter
     for x, y, label in zip(nums, vals, idens):
         ax.annotate(label, (x, y))
-    ax.legend()
     ax.set_ylabel(measure.lower())
     if "dim" in args.sort_by:
         ax.set_title(f"{measure} vs. Model Size{range_str}")
@@ -216,16 +214,16 @@ def plot_arrays(
         if array is None:
             continue
 
-        color = get_model_colour(iden)
+        label, color = f"{iden} ({DIMS[iden]})", get_model_colour(iden)
         if "hist" in measure:
-            plot_histogram(ax, *array, f"{iden} ({DIMS[iden]})", color)
+            plot_histogram(ax, *array, label, color)
             continue
 
         if len(array.shape) == 1:
             intercept = (len(array) - 1, array[-1])
-            plot_graph(ax, array, f"{iden} ({DIMS[iden]})", color, intercept)
+            plot_graph(ax, array, label, color, intercept)
         else:
-            ax.scatter(*array, 5, color, alpha=0.15, label=f"{iden} ({DIMS[iden]})")
+            ax.scatter(*array, 5, color, alpha=0.15, label=label)
 
     if "hist" in measure:
         xlabel, ylabel = "Value", "Frequency"
@@ -234,11 +232,13 @@ def plot_arrays(
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    ax.set_title(f"{title} {'('+iden+') ' if iden else ''}{range_str}")
+    ax.set_title(f"{title} {'('+selected+') ' if selected else ''}{range_str}")
     ax.set_xscale(xscale if xscale else args.xscale)
     ax.set_yscale(yscale if yscale else args.yscale)
-    if not selected:
-        ax.legend()
+
+    legend = ax.legend(markerscale=3)
+    for handle in legend.legend_handles:
+        handle.set_alpha(0.85)
 
     fig.tight_layout()
     filename = f"{measure}{'-'+selected if selected else ''}.{args.fig_format}"
@@ -247,7 +247,7 @@ def plot_arrays(
 
 def plot_freqs_norms(selected: str = None):
     plot_arrays(
-        "Norms of Means (Frequency vs. Norm)",
+        "Norms of Means (vs. Frequency)",
         "freqs_norms",
         "Token Frequency",
         "Mean Norm",
@@ -259,7 +259,7 @@ def plot_freqs_norms(selected: str = None):
 if args.eigenvalues:
     plot_arrays("Eigenvalues of Outer Products of Means", "eig_vals", yscale="log")
 if args.norms:
-    plot_statistic("Norms of Means (stddev/mean)", "norms_cv")
+    plot_statistic("Norms of Means (CV)", "norms_cv")
     plot_arrays("Norms of Means (Histogram)", "norms_hist")
     for iden in sorted(ANALYTICS.keys(), key=model_sorter):
         plot_freqs_norms(iden)
@@ -267,7 +267,10 @@ if args.norms:
 if args.coherence:
     plot_statistic("Coherence (mean)", "coh_mean")
     plot_statistic("Coherence (stddev)", "coh_std")
+    plot_statistic("Coherence (CV)", "coh_cv")
     plot_arrays("Interference of Means", "coh_hist", "Values (Off-Diagonals)")
+if args.duality:
+    plot_statistic("Self-Duality", "duality")
 if args.inv_snr:
     plot_statistic("Inverse Signal-to-Noise Ratio", "inv_snr")
 
