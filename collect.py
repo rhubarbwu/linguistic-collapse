@@ -2,14 +2,14 @@ import math
 from argparse import ArgumentParser
 
 import h5py
-import torch
+import torch as pt
 from tqdm import tqdm
 
 from lib.collapse import Statistics
 from lib.collection import process_batch
 from lib.model import get_model, set_model_args
 
-torch.set_grad_enabled(False)
+pt.set_grad_enabled(False)
 
 parser = ArgumentParser()
 parser.add_argument("-dev", "--device", type=str, default="cpu")
@@ -32,7 +32,7 @@ model, C, D = get_model(args)
 dataset = h5py.File(f"{args.dataset_path}/tinystories-train.h5", "r")
 N_seqs = len(dataset["tokens"])
 N_batches = int(math.ceil(N_seqs / args.batch_size))
-extract = lambda i: torch.tensor(dataset["tokens"][str(i)], dtype=torch.int32)
+extract = lambda i: pt.tensor(dataset["tokens"][str(i)], dtype=pt.int32)
 
 
 config_str = f"{args.output_dir}/{args.model_size}"
@@ -56,7 +56,7 @@ for b_idx in tqdm(range(N_batches_seen, N_batches), ncols=79):
 
     batch = [extract(i) for i in range(start, end)]
     lengths = [len(sample) for sample in batch]
-    expected_count = sum(lengths) - torch.tensor(lengths).count_nonzero()
+    expected_count = sum(lengths) - pt.tensor(lengths).count_nonzero()
     X, Y = process_batch(model, batch)
     assert X.shape[0] == Y.shape[0] == expected_count
 

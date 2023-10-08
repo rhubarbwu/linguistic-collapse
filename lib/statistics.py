@@ -1,6 +1,6 @@
 from typing import Tuple
 
-import torch
+import torch as pt
 import torch.linalg as la
 from sklearn.cluster import KMeans, MiniBatchKMeans, SpectralClustering
 from sklearn.mixture import GaussianMixture
@@ -9,16 +9,16 @@ from tqdm import tqdm
 
 
 def apply_pca(data: Tensor, K: int = 2) -> Tensor:
-    cov_matrix = torch.mm(data.T, data) / (data.shape[0] - 1)
+    cov_matrix = pt.mm(data.T, data) / (data.shape[0] - 1)
 
     eig_vals, eig_vecs = la.eig(cov_matrix)
-    eig_vals, eig_vecs = torch.real(eig_vals), torch.real(eig_vecs)
+    eig_vals, eig_vecs = pt.real(eig_vals), pt.real(eig_vecs)
 
-    eig_val_idx = torch.argsort(eig_vals, descending=True)
+    eig_val_idx = pt.argsort(eig_vals, descending=True)
     eig_vals = eig_vals[eig_val_idx]
     eig_vecs = eig_vecs[:, eig_val_idx]
 
-    projected = torch.mm(data, eig_vecs[:, :K])
+    projected = pt.mm(data, eig_vecs[:, :K])
     return projected
 
 
@@ -55,16 +55,16 @@ def compute_centroids(
     assert data.shape[0] == weights.shape[0]
 
     if K == 1:
-        labels = torch.zeros(len(weights), dtype=torch.uint8, device=data.device)
+        labels = pt.zeros(len(weights), dtype=pt.uint8, device=data.device)
     elif K > 1:
         labels, centroids = cluster_kmeans(data, K)
         if weights is None:  # unweighted centroids
-            return labels, torch.tensor(centroids, device=data.device)
+            return labels, pt.tensor(centroids, device=data.device)
 
-    eps = torch.finfo(data.dtype).eps
+    eps = pt.finfo(data.dtype).eps
 
     # weighted centroids
-    centroids = torch.zeros(K, data.shape[-1], device=data.device)
+    centroids = pt.zeros(K, data.shape[-1], device=data.device)
     for r in range(K):
         data_r = data[labels == r]
         weights_r = weights[labels == r].to(data.dtype)
@@ -86,13 +86,13 @@ def collect_hist(
     min_val -= 0.01 * val_range
     max_val += 0.01 * val_range
 
-    hist = torch.zeros(num_bins, dtype=int, device=data.device)
-    count = lambda x: torch.histc(x, num_bins, min_val, max_val).int()
+    hist = pt.zeros(num_bins, dtype=int, device=data.device)
+    count = lambda x: pt.histc(x, num_bins, min_val, max_val).int()
     if triu:
         for i in tqdm(range((N - 1) // 2), ncols=79, desc=desc):
             upper = data[i][i + 1 :]
             lower = data[N - i - 2][N - i - 1 :]
-            folded = torch.cat((upper, lower))
+            folded = pt.cat((upper, lower))
             hist += count(folded)
         if N % 2 == 0:
             row = data[N // 2 - 1][N // 2 :]
@@ -101,6 +101,6 @@ def collect_hist(
         for row in tqdm(data, ncols=79, desc=desc):
             hist += count(row)
 
-    edges = torch.linspace(min_val, max_val, num_bins + 1)
+    edges = pt.linspace(min_val, max_val, num_bins + 1)
 
     return hist, edges

@@ -1,4 +1,4 @@
-from argparse import ArgumentParser, Namespace
+from argparse import ArgumentParser
 from typing import Any, Tuple
 
 from matplotlib.axes import Axes

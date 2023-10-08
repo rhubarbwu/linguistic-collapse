@@ -1,18 +1,15 @@
 import gc
-import os
 from os.path import isfile
 from typing import Any, List, Set, Tuple
 
-import numpy as np
-import torch
+import torch as pt
 import torch.linalg as la
-from matplotlib.axes import Axes
 from torch import (Tensor, bfloat16, float16, float32, int8, int16, int32,
                    int64, uint8)
 from tqdm import tqdm
 
-normalize = lambda x: x / (la.norm(x, dim=-1, keepdim=True) + torch.finfo(x.dtype).eps)
-get_dev_name = lambda d: "cpu" if d == "cpu" else torch.cuda.get_device_name(d)
+normalize = lambda x: x / (la.norm(x, dim=-1, keepdim=True) + pt.finfo(x.dtype).eps)
+get_dev_name = lambda d: "cpu" if d == "cpu" else pt.cuda.get_device_name(d)
 
 
 DTYPES = {
@@ -22,11 +19,11 @@ DTYPES = {
 }
 
 
-def select_int_type(value: int = 0) -> torch.dtype:
+def select_int_type(value: int = 0) -> pt.dtype:
     if value is None:
         return None
     for dtype in [int8, uint8, int16, int32, int64]:
-        if value < torch.iinfo(dtype).max:
+        if value < pt.iinfo(dtype).max:
             return dtype
 
     raise ValueError(f"{value} too big")
@@ -51,8 +48,8 @@ def clean_up(*garbage: List[Any]):
     for g in garbage:
         del g
     gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    if pt.cuda.is_available():
+        pt.cuda.empty_cache()
 
 
 CRUFT = [".pt", "means-", "covs-", "-means", "-covs"]
@@ -114,17 +111,17 @@ def inner_product(
     desc: str = "inner prod",
 ) -> Tensor:
     if not patch_size:
-        return torch.inner(data, data)
+        return pt.inner(data, data)
 
     n_rows = data.shape[0]
     n_patches = (n_rows + patch_size - 1) // patch_size
 
-    inner_prods = torch.zeros(n_rows, n_rows, device=data.device)
+    inner_prods = pt.zeros(n_rows, n_rows, device=data.device)
     for i in tqdm(range(n_patches), ncols=79, desc=desc):
         i0, i1 = i * patch_size, min((i + 1) * patch_size, n_rows)
         patch_i = data[i0:i1]
         for j in range(n_patches):
             j0, j1 = j * patch_size, min((j + 1) * patch_size, n_rows)
             patch_j = data[j0:j1]
-            inner_prods[i0:i1, j0:j1] = torch.inner(patch_i, patch_j)
+            inner_prods[i0:i1, j0:j1] = pt.inner(patch_i, patch_j)
     return inner_prods

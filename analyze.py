@@ -1,7 +1,7 @@
 from argparse import ArgumentParser
 from os import makedirs
 
-import torch
+import torch as pt
 
 from lib.collapse import Statistics
 from lib.model import (DIMS, get_classifier_weights, get_model_colour,
@@ -9,6 +9,8 @@ from lib.model import (DIMS, get_classifier_weights, get_model_colour,
 from lib.statistics import collect_hist
 from lib.utils import identify, inner_product
 from lib.visualization import TOO_BIG, plot_graph, plot_histogram, set_vis_args
+
+pt.set_grad_enabled(False)
 
 LINE_SEP = "-" * 79
 
@@ -64,7 +66,7 @@ for file in args.input_files:
     covs_path = file if "covs" in file else PATHS[iden][1]
     PATHS[iden] = (means_path, covs_path)
 
-longest_iden = max(5, max([len(iden) for iden in PATHS]))
+LONGEST_IDEN = max(5, max([len(iden) for iden in PATHS]))
 
 
 if args.progress:
@@ -89,13 +91,13 @@ for iden, (means_path, covs_path) in PATHS.items():
 if args.progress:
     print(LINE_SEP)
     head = [p.rjust(COL_WIDTH) for p in ["means", "(seqs)", "covs", "(seqs)", "unique"]]
-    print("".ljust(longest_iden + 1), *head)
+    print("".ljust(LONGEST_IDEN + 1), *head)
     for iden in sorted(DIMS, key=model_sorter):
         Ns = PROGRESS[iden]
         row = [str(n).rjust(COL_WIDTH) for n in Ns]
-        print(iden.ljust(longest_iden + 1), *row)
+        print(iden.ljust(LONGEST_IDEN + 1), *row)
     row = [str(n).rjust(COL_WIDTH) for n in 2 * args.totals]
-    print("total".ljust(longest_iden + 1), *row)
+    print("total".ljust(LONGEST_IDEN + 1), *row)
 
 
 print(LINE_SEP)
@@ -108,52 +110,54 @@ for iden in sorted(DIMS, key=model_sorter):
     if iden not in STATISTICS:
         continue
     collected: Statistics = STATISTICS[iden]
+    if collected.device != args.device:
+        collected.move_to(args.device)
+
     indices = collected.counts_in_range(args.min_per_class, args.max_per_class)
     counts = collected.counts[indices]
     means, mean_G = collected.compute_means(indices)
 
-    analytics = {}
+    if iden not in ANALYTICS:
+        ANALYTICS[iden] = {}
 
     if args.eigenvalues:
         outer = inner_product(means.T, args.patch_size, "eigs outer")
         if outer.shape[0] > TOO_BIG:
             print(f"W: {outer.shape[0]} > {TOO_BIG}, eigenvalues disabled")
         else:
-            eig_vals = torch.linalg.eigvalsh(outer)
-            analytics["eig_vals"] = eig_vals.real
+            eig_vals = pt.linalg.eigvalsh(outer)
+            ANALYTICS[iden]["eig_vals"] = eig_vals.real
 
     if args.norms:
         norms = means.norm(dim=-1) ** 2
         norms_hist = collect_hist(norms.unsqueeze(0), args.num_bins, desc="norms hist")
-        analytics["norms_cv"] = norms.std() / norms.mean()
-        analytics["norms_hist"] = norms_hist
-        analytics["freqs_norms"] = torch.stack((counts, norms))
+        ANALYTICS[iden]["norms_cv"] = norms.std() / norms.mean()
+        ANALYTICS[iden]["norms_hist"] = norms_hist
+        ANALYTICS[iden]["freqs_norms"] = pt.stack((counts, norms))
         del norms
 
     if args.coherence:
         inner = collected.coherence(indices, args.n_clusters, args.patch_size)
         hist, edges = collect_hist(inner, args.num_bins, True, desc="coh hist")
-        triu_vals = inner[torch.ones_like(inner).triu(1) != 0]
-        assert len(triu_vals) == hist.sum().int().item()
+        coh_mean = inner.sum() / (inner.shape[0] * (inner.shape[0] - 1))
+        inner.fill_diagonal_(coh_mean)
+        coh_std = inner.std()
         del inner
 
-        analytics["coh_hist"] = (hist, edges)
-        analytics["coh_mean"] = triu_vals.mean().cpu()
-        analytics["coh_std"] = triu_vals.std().cpu()
-        analytics["coh_cv"] = analytics["coh_std"] / analytics["coh_mean"]
-        del triu_vals
+        ANALYTICS[iden]["coh_hist"] = (hist, edges)
+        ANALYTICS[iden]["coh_mean"] = coh_mean.cpu()
+        ANALYTICS[iden]["coh_std"] = coh_std.cpu()
+        ANALYTICS[iden]["coh_cv"] = coh_std.cpu() / coh_mean.cpu()
+        del coh_mean, coh_std, hist, edges
 
     if args.duality:
         args.model_size = iden
         W = get_classifier_weights(args)
-        analytics["duality"] = collected.self_duality(W, indices, args.n_clusters)
+        ANALYTICS[iden]["duality"] = collected.self_duality(W, indices, args.n_clusters)
         del W
 
     if args.inv_snr:
-        analytics["inv_snr"] = collected.inv_snr()
-
-    if analytics:
-        ANALYTICS[iden] = analytics
+        ANALYTICS[iden]["inv_snr"] = collected.inv_snr()
 
 
 range_str = ""
@@ -177,7 +181,10 @@ def plot_statistic(measure: str, key: str):
     else:
         nums = [numerate(iden, "m") for iden in idens]
 
-    vals = [ANALYTICS[iden].get(key, None) for iden in idens]
+    vals = [
+        None if key not in ANALYTICS[iden] else ANALYTICS[iden][key].cpu()
+        for iden in idens
+    ]
 
     ax.scatter(nums, vals, marker="o", label="TinyStories")  # plot of scatter
     for x, y, label in zip(nums, vals, idens):
@@ -219,6 +226,7 @@ def plot_arrays(
             plot_histogram(ax, *array, label, color)
             continue
 
+        array = array.cpu()
         if len(array.shape) == 1:
             intercept = (len(array) - 1, array[-1])
             plot_graph(ax, array, label, color, intercept)

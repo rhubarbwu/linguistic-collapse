@@ -3,7 +3,7 @@ from argparse import ArgumentParser, Namespace
 from typing import Tuple
 
 import matplotlib.pyplot as plt
-import torch
+import torch as pt
 from torch import Tensor
 from torch.nn import Identity
 from transformers import AutoModelForCausalLM
@@ -51,7 +51,7 @@ def set_model_args(parser: ArgumentParser):
         "--model_size",
         type=str,
         choices=DIMS.keys(),
-        default="1M",
+        default="1Mx8",
     )
     parser.add_argument(
         "-mt",
@@ -105,7 +105,7 @@ def get_classifier_weights(args: Namespace) -> Tensor:
 
         get_model(args)
 
-    return torch.load(classifier_file, args.device)
+    return pt.load(classifier_file, args.device)
 
 
 def get_model(args: Namespace) -> Tuple[AutoModelForCausalLM, int, int]:
@@ -125,7 +125,7 @@ def get_model(args: Namespace) -> Tuple[AutoModelForCausalLM, int, int]:
     classifier_file = f"{args.model_cache}/{args.model_size}-classifier.pt"
     if not os.path.exists(classifier_file):
         print(f"caching weights for {args.model_size} in {classifier_file}", flush=True)
-        torch.save(W, classifier_file)
+        pt.save(W, classifier_file)
 
     model.to(args.device)
     return model, C, D
@@ -143,7 +143,7 @@ if __name__ == "__main__":
     hist_keys = ["inner", "norms"]
     hists = {k: plt.subplots(figsize=(args.fig_size)) for k in hist_keys}
 
-    indices = None if not args.indices else torch.load(args.indices, args.device)
+    indices = None if not args.indices else pt.load(args.indices, args.device)
 
     for key, (fig, ax) in hists.items():
         key_str = "Norms" if key == "norms" else "Inner Product"
