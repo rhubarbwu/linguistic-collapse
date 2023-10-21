@@ -21,8 +21,8 @@ parser.add_argument(
     "-total",
     "--totals",
     type=int,
-    nargs=2,
-    default=(469753028, 2119719),
+    nargs=3,
+    default=(469753028, 2119719, 29243),
 )
 
 parser.add_argument("-i", "--input_files", type=str, nargs="+", default=[])
@@ -96,7 +96,7 @@ if args.progress:
         Ns = PROGRESS[iden]
         row = [str(n).rjust(COL_WIDTH) for n in Ns]
         print(iden.ljust(LONGEST_IDEN + 1), *row)
-    row = [str(n).rjust(COL_WIDTH) for n in 2 * args.totals]
+    row = [str(n).rjust(COL_WIDTH) for n in args.totals[:2] + args.totals]
     print("total".ljust(LONGEST_IDEN + 1), *row)
 
 

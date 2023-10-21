@@ -1,12 +1,12 @@
 import math
 from argparse import ArgumentParser
 
-import h5py
 import torch as pt
 from tqdm import tqdm
 
 from lib.collapse import Statistics
 from lib.collection import process_batch
+from lib.data import load_naive_uint16
 from lib.model import get_model, set_model_args
 
 pt.set_grad_enabled(False)
@@ -29,7 +29,7 @@ args = parser.parse_args()
 model, C, D = get_model(args)
 
 
-dataset = h5py.File(f"{args.dataset_path}/tinystories-train.h5", "r")
+dataset = load_naive_uint16(args.dataset_path)
 N_seqs = len(dataset["tokens"])
 N_batches = int(math.ceil(N_seqs / args.batch_size))
 extract = lambda i: pt.tensor(dataset["tokens"][str(i)], dtype=pt.int32)
