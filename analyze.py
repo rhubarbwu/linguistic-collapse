@@ -1,14 +1,16 @@
 from argparse import ArgumentParser
 from os import makedirs
+from random import sample
 
 import torch as pt
 
 from lib.collapse import Statistics
 from lib.model import (DIMS, get_classifier_weights, get_model_colour,
-                       sort_by_dim, sort_by_params)
+                       set_model_args, sort_by_dim, sort_by_params)
 from lib.statistics import collect_hist
 from lib.utils import identify, inner_product
-from lib.visualization import TOO_BIG, plot_graph, plot_histogram, set_vis_args
+from lib.visualization import (TOO_BIG, plot_graph, plot_histogram,
+                               plot_scatters, set_vis_args)
 
 pt.set_grad_enabled(False)
 
@@ -26,7 +28,6 @@ parser.add_argument(
 )
 
 parser.add_argument("-i", "--input_files", type=str, nargs="+", default=[])
-parser.add_argument("-mc", "--model_cache", type=str, default=".")
 
 parser.add_argument("-prog", "--progress", action="store_true")
 parser.add_argument("-eig", "--eigenvalues", action="store_true")
@@ -40,7 +41,9 @@ parser.add_argument("-k", "--n_clusters", type=int, default=1)
 parser.add_argument("-mpc", "--min_per_class", type=int, default=1)
 parser.add_argument("-Mpc", "--max_per_class", type=int, default=None)
 parser.add_argument("-ps", "--patch_size", type=int, default=1024)
+parser.add_argument("-d", "--dims", type=int, nargs=2, default=None)
 
+set_model_args(parser)
 set_vis_args(parser)
 args = parser.parse_args()
 
@@ -116,6 +119,8 @@ for iden in sorted(DIMS, key=model_sorter):
     indices = collected.counts_in_range(args.min_per_class, args.max_per_class)
     counts = collected.counts[indices]
     means, mean_G = collected.compute_means(indices)
+    if args.dims is None:
+        args.dims = sample(list(range(len(indices))), 2)
 
     if iden not in ANALYTICS:
         ANALYTICS[iden] = {}
@@ -153,7 +158,14 @@ for iden in sorted(DIMS, key=model_sorter):
     if args.duality:
         args.model_size = iden
         W = get_classifier_weights(args)
-        ANALYTICS[iden]["duality"] = collected.self_duality(W, indices, args.n_clusters)
+        ANALYTICS[iden]["dual_diff"] = collected.diff_duality(W, indices)
+
+        dual_dot, proj_m, proj_c = collected.dot_duality(W, indices, args.dims)
+        ANALYTICS[iden]["dual_dot_projs"] = proj_m, proj_c
+        ANALYTICS[iden]["dual_dot"] = dual_dot.mean().cpu()
+
+        dual_dot_hist = collect_hist(dual_dot, args.num_bins, desc="dual hist")
+        ANALYTICS[iden]["dual_hist"] = dual_dot_hist
         del W
 
     if args.inv_snr:
@@ -264,6 +276,21 @@ def plot_freqs_norms(selected: str = None):
     )
 
 
+def plot_dual_scatters(prefix: str, measure: str):
+    identifiers = sorted(ANALYTICS.keys(), key=model_sorter)
+    for iden in identifiers:
+        path = f"{args.output_dir}/{prefix}-{iden}.png"
+        proj_m, proj_c = ANALYTICS[iden][measure]
+        plot_scatters(
+            proj_c,
+            proj_m,
+            path,
+            f"{iden}, d={DIMS[iden]}",
+            dims=args.dims,
+            intercept=(0, 0),
+        )
+
+
 if args.eigenvalues:
     plot_arrays("Eigenvalues of Outer Products of Means", "eig_vals", yscale="log")
 if args.norms:
@@ -278,7 +305,15 @@ if args.coherence:
     plot_statistic("Coherence (CV)", "coh_cv")
     plot_arrays("Interference of Means", "coh_hist", "Values (Off-Diagonals)")
 if args.duality:
-    plot_statistic("Self-Duality", "duality")
+    plot_statistic("Self-Duality (Difference)", "dual_diff")
+    plot_statistic("Self-Duality (Mean Dot-Product)", "dual_dot")
+    plot_arrays(
+        "Self-Duality (Dot-Product Histogram)",
+        "dual_hist",
+        "Self-Duality (Dot-Product)",
+    )
+    plot_dual_scatters("dual_dot", "dual_dot_projs")
+
 if args.inv_snr:
     plot_statistic("Inverse Signal-to-Noise Ratio", "inv_snr")
 

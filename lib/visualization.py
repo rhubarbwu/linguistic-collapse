@@ -1,6 +1,7 @@
 from argparse import ArgumentParser
 from typing import Any, Tuple
 
+import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from torch import Tensor
 
@@ -46,3 +47,33 @@ def plot_graph(
     if intercept:
         ax.axvline(intercept[0], color=color, linestyle="--", linewidth=0.5)
         ax.axhline(intercept[1], color=color, linestyle="--", linewidth=0.5)
+
+
+def plot_scatters(
+    A: Tensor,
+    B: Tensor,
+    path: str,
+    iden: str = None,
+    label_A: str = "Classifiers",
+    label_B: str = "Means",
+    dims: Tuple[int, int] = (0, 1),
+    intercept: Tuple[int, int] = None,
+):
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    ax.scatter(B[0, :], B[1, :], alpha=0.25, c="r", label=label_B.lower())
+    ax.scatter(A[0, :], A[1, :], alpha=0.25, c="b", label=label_A.lower())
+    if intercept:
+        ax.axvline(intercept[0], color="black", linestyle="--", linewidth=0.5)
+        ax.axhline(intercept[1], color="black", linestyle="--", linewidth=0.5)
+
+    ax.legend()
+    ax.axis("equal")
+    ax.set_xlabel(f"d={dims[0]}")
+    ax.set_ylabel(f"d={dims[1]}")
+
+    title = f"{label_A} vs. {label_B}"
+    if iden:
+        title = f"{title} ({iden})"
+    ax.set_title(title)
+    fig.savefig(path)

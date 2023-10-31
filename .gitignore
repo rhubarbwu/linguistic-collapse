@@ -1,4 +1,5 @@
 __pycache__
-*.pdf
-*.png
-*.pt
+**/*.log
+**/*.pdf
+**/*.png
+**/*.pt

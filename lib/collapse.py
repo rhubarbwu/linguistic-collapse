@@ -182,9 +182,7 @@ class Statistics:
 
         return inner_product(normalize(diff), patch_size, "coh inner")
 
-    def self_duality(
-        self, weights: Tensor, idxs: List[int] = None, K: int = 1
-    ) -> pt.float:
+    def diff_duality(self, weights: Tensor, idxs: List[int] = None) -> pt.float:
         """Compute self-duality (NC3).
         weights (C x D): weights of the linear classifier
         K: number of cluster (regional) means to centre around.
@@ -198,6 +196,27 @@ class Statistics:
 
         duality = la.norm(normalize(diff) - weights_normed) ** 2 / self.C
         return duality.cpu()
+
+    def dot_duality(
+        self,
+        weights: Tensor,
+        idxs: List[int] = None,
+        dims: Tuple[int] = (0, 1),
+    ) -> Tensor:
+        means, mean_G = self.compute_means(idxs)
+        diff_normed = normalize(means - mean_G)
+
+        weights = weights if idxs is None else weights[idxs]
+        weights_normed = normalize(weights).to(self.device)
+
+        dot_prod = diff_normed * weights_normed
+        result = pt.sum(dot_prod, dim=1)
+
+        selected = (weights_normed[dims, :] + diff_normed[dims, :]) / 2
+        proj_means = selected @ diff_normed.mT
+        proj_cls = selected @ weights_normed.mT
+
+        return result, proj_means, proj_cls
 
     def inv_snr(self) -> pt.float:
         """Compute separation fuzziness/signal-to-noise ratio tr{Sw Sb^-1} (NC2)."""
