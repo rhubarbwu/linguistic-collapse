@@ -1,8 +1,10 @@
+accelerate
 datasets
+evaluate
 h5py
-matplotlib
+matplotlib>=3.7
 optimum
 scikit-learn
 torch
 tqdm
-transformers
+transformers @ git+https://github.com/huggingface/transformers

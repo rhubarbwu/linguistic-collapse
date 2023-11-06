@@ -1,186 +1,202 @@
-import os
-from argparse import ArgumentParser, Namespace
-from typing import Tuple
+from dataclasses import dataclass, field
+from logging import Logger
+from typing import Optional
 
-import matplotlib.pyplot as plt
 import torch as pt
-from torch import Tensor
-from torch.nn import Identity
-from transformers import AutoModelForCausalLM
+from transformers import (CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING,
+                          AutoConfig, AutoModelForCausalLM, AutoTokenizer)
 
-from lib.statistics import collect_hist
-from lib.utils import DTYPES, inner_product, normalize, numerate
-from lib.visualization import plot_histogram, set_vis_args
-
-DIMS = {
-    "1Mx8": 64,
-    "3Mx8": 128,
-    "8Mx8": 256,
-    "28Mx8": 512,
-    "33Mx4": 768,
-    "21Mx1": 1024,
-    "33Mx2": 1024,
-}
-
-COLOURS = {
-    "1Mx8": "#1f77b4",
-    "3Mx8": "#ff7f0e",
-    "8Mx8": "#2ca02c",
-    "28Mx8": "#d62728",
-    "33Mx4": "#9467bd",
-    "21Mx1": "#8c564b",
-    "33Mx2": "#e377c2",
-    # "12b": "#7f7f7f",
-}
-
-HUB_NAMES = {
-    "1Mx8": "1M",
-    "3Mx8": "3M",
-    "8Mx8": "8M",
-    "28Mx8": "28M",
-    "33Mx4": "33M",
-    "21Mx1": "1Layer-21M",
-    "33Mx2": "2Layers-33M",
-}
+MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
+MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
 
-def set_model_args(parser: ArgumentParser):
-    parser.add_argument("-mc", "--model_cache", type=str, default=".")
-    parser.add_argument(
-        "-ms",
-        "--model_size",
-        type=str,
-        choices=DIMS.keys(),
-        default="1Mx8",
+@dataclass
+class ModelArguments:
+    """
+    Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch.
+    """
+
+    model_name_or_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "The model checkpoint for weights initialization. Don't set if you want to train a model from scratch."
+            )
+        },
     )
-    parser.add_argument(
-        "-mt",
-        "--model_dtype",
-        type=str,
-        choices=DTYPES.keys(),
-        default="fp32",
+    model_type: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "If training from scratch, pass a model type from the list: "
+            + ", ".join(MODEL_TYPES)
+        },
     )
-    parser.add_argument(
-        "-mss",
-        "--model_sizes",
-        type=str,
-        nargs="+",
-        choices=DIMS.keys(),
-        default=DIMS.keys(),
+    config_overrides: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Override some existing default config settings when a model is trained from scratch. Example: "
+                "n_embd=10,resid_pdrop=0.2,scale_attn_weights=false,summary_type=cls_index"
+            )
+        },
     )
-    parser.add_argument("-bt", "--better", action="store_true")
-    parser.add_argument("-f", "--force_load", action="store_true")
-
-
-def get_hub_name(name: str, instruct: bool = False):
-    if "x" in name:
-        parts = name.split("x")
-        name = f"{parts[1]}Layer{'s' if int(parts[1]) > 1 else ''}-{parts[0]}"
-    if instruct:
-        name = f"Instruct-{name}"
-
-    return f"roneneldan/TinyStories-{name}"
-
-
-sort_by_params = lambda x: numerate(x, "m")
-sort_by_dim = lambda x: DIMS[x]
-
-
-def get_model_colour(iden: str) -> str:
-    iden = iden.split("-")[0]
-    if iden in COLOURS:
-        return COLOURS[iden]
-
-    return "#000000"
-
-
-def get_classifier_weights(args: Namespace) -> Tensor:
-    classifier_file = f"{args.model_cache}/{args.model_size}-classifier.pt"
-    if not os.path.exists(classifier_file):
-        print(f"classifier weights file for {args.model_size} not found...")
-
-        if not args.force_load:
-            if not input("load? ").upper().startswith("Y"):
-                return None
-
-        get_model(args)
-
-    return pt.load(classifier_file, args.device)
-
-
-def get_model(args: Namespace) -> Tuple[AutoModelForCausalLM, int, int]:
-    model = AutoModelForCausalLM.from_pretrained(
-        f"roneneldan/TinyStories-{HUB_NAMES[args.model_size]}",
-        cache_dir=args.model_cache,
-        torch_dtype=DTYPES[args.model_dtype],
+    config_name: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Pretrained config name or path if not the same as model_name"
+        },
     )
-    C, D = model.lm_head.out_features, model.lm_head.in_features
-    W = list(model.lm_head.parameters())[0].detach()
-    del model.lm_head
-    model.lm_head = Identity()
+    tokenizer_name: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Pretrained tokenizer name or path if not the same as model_name"
+        },
+    )
+    cache_dir: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Where do you want to store the pretrained models downloaded from huggingface.co"
+        },
+    )
+    use_fast_tokenizer: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."
+        },
+    )
+    model_revision: str = field(
+        default="main",
+        metadata={
+            "help": "The specific model version to use (can be a branch name, tag name or commit id)."
+        },
+    )
+    token: str = field(
+        default=None,
+        metadata={
+            "help": (
+                "The token to use as HTTP bearer authorization for remote files. If not specified, will use the token "
+                "generated when running `huggingface-cli login` (stored in `~/.huggingface`)."
+            )
+        },
+    )
+    use_auth_token: bool = field(
+        default=None,
+        metadata={
+            "help": "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token`."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether or not to allow for custom models defined on the Hub in their own modeling files. This option"
+                "should only be set to `True` for repositories you trust and in which you have read the code, as it will "
+                "execute code present on the Hub on your local machine."
+            )
+        },
+    )
+    torch_dtype: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Override the default `torch.dtype` and load the model under this dtype. If `auto` is passed, the "
+                "dtype will be automatically derived from the model's weights."
+            ),
+            "choices": ["auto", "bfloat16", "float16", "float32"],
+        },
+    )
+    low_cpu_mem_usage: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "It is an option to create the model as an empty shell, then only materialize its parameters when the pretrained weights are loaded. "
+                "set True will benefit LLM loading time and RAM consumption."
+            )
+        },
+    )
 
-    if args.better:
-        model.to_bettertransformer()
-
-    classifier_file = f"{args.model_cache}/{args.model_size}-classifier.pt"
-    if not os.path.exists(classifier_file):
-        print(f"caching weights for {args.model_size} in {classifier_file}", flush=True)
-        pt.save(W, classifier_file)
-
-    model.to(args.device)
-    return model, C, D
+    def __post_init__(self):
+        if self.config_overrides is not None and (
+            self.config_name is not None or self.model_name_or_path is not None
+        ):
+            raise ValueError(
+                "--config_overrides can't be used in combination with --config_name or --model_name_or_path"
+            )
 
 
-if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument("-dev", "--device", type=str, default="cpu")
-    parser.add_argument("-ps", "--patch_size", type=int, default=1024)
-    parser.add_argument("-idx", "--indices", type=str, default=None)
-    set_model_args(parser)
-    set_vis_args(parser)
-    args = parser.parse_args()
+def get_config(args: ModelArguments, logger: Logger) -> AutoConfig:
+    config_kwargs = {
+        "cache_dir": args.cache_dir,
+        "revision": args.model_revision,
+        "token": args.token,
+        "trust_remote_code": args.trust_remote_code,
+    }
+    if args.config_name:
+        config = AutoConfig.from_pretrained(args.config_name, **config_kwargs)
+    elif args.model_name_or_path:
+        config = AutoConfig.from_pretrained(args.model_name_or_path, **config_kwargs)
+    else:
+        config = CONFIG_MAPPING[args.model_type]()
+        logger.warning("You are instantiating a new config instance from scratch.")
+        if args.config_overrides is not None:
+            logger.info(f"Overriding config: {args.config_overrides}")
+            config.update_from_string(args.config_overrides)
+            logger.info(f"New config: {config}")
+    return config
 
-    hist_keys = ["inner", "norms"]
-    hists = {k: plt.subplots(figsize=(args.fig_size)) for k in hist_keys}
 
-    indices = None if not args.indices else pt.load(args.indices, args.device)
-
-    for key, (fig, ax) in hists.items():
-        key_str = "Norms" if key == "norms" else "Inner Product"
-        ax.set_title(
-            f"{key_str} of TinyStories Classifier Weights (Subset of GPT Neo's Vocabulary)"
+def get_tokenizer(args: ModelArguments) -> AutoTokenizer:
+    tokenizer_kwargs = {
+        "cache_dir": args.cache_dir,
+        "use_fast": args.use_fast_tokenizer,
+        "revision": args.model_revision,
+        "token": args.token,
+        "trust_remote_code": args.trust_remote_code,
+    }
+    if args.tokenizer_name:
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.tokenizer_name, **tokenizer_kwargs
         )
-        ax.set_xlabel(f"value ({args.num_bins} bins)")
-        ax.set_ylabel("frequency")
-        if key == "norms":
-            ax.set_yscale("log")
+    elif args.model_name_or_path:
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.model_name_or_path, **tokenizer_kwargs
+        )
+    else:
+        raise ValueError(
+            "You are instantiating a new tokenizer from scratch. This is not supported by this script. "
+            "You can do it from another script, save it, and load it from here, using --tokenizer_name."
+        )
 
-    for iden in args.model_sizes:
-        args.model_size = iden
-        W = get_classifier_weights(args)
-        W = W if indices is None else W[indices]
-        if W is None:
-            continue
+    return tokenizer
 
-        label, color = f"{iden} ({DIMS[iden]})", get_model_colour(iden)
 
-        norms_ax = hists["norms"][1]
-        W_norms = W.norm(dim=-1).unsqueeze(0)
-        hist, edges = collect_hist(W_norms, args.num_bins, desc="norms")
-        plot_histogram(norms_ax, hist, edges, label, color)
+def get_model(
+    args: ModelArguments, config: AutoConfig, logger: Logger
+) -> AutoModelForCausalLM:
+    if args.model_name_or_path:
+        torch_dtype = (
+            args.torch_dtype
+            if args.torch_dtype in ["auto", None]
+            else getattr(pt, args.torch_dtype)
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name_or_path,
+            from_tf=bool(".ckpt" in args.model_name_or_path),
+            config=config,
+            cache_dir=args.cache_dir,
+            revision=args.model_revision,
+            token=args.token,
+            trust_remote_code=args.trust_remote_code,
+            torch_dtype=torch_dtype,
+            low_cpu_mem_usage=args.low_cpu_mem_usage,
+        )
+    else:
+        model = AutoModelForCausalLM.from_config(
+            config, trust_remote_code=args.trust_remote_code
+        )
+        n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
+        logger.info(
+            f"Training new model from scratch - Total size={n_params/2**20:.2f}M params"
+        )
 
-        W_normed = normalize(W - W.mean(dim=0, keepdim=True))
-        inner_prod = inner_product(W_normed, patch_size=args.patch_size)
-        inner_ax = hists["inner"][1]
-        inner_ax.axvline(0, color="gray", linestyle="--", linewidth=1)
-        hist, edges = collect_hist(inner_prod, args.num_bins, True, desc="inner prod")
-        plot_histogram(inner_ax, hist, edges, label, color)
-
-        del W, norms_ax, W_norms, hist, edges, W_normed, inner_prod
-
-    for key, (fig, ax) in hists.items():
-        ax.legend()
-        fig.tight_layout()
-        fig.savefig(f"{args.output_dir}/cls_{key}.{args.fig_format}")
-
-    # get_model(args)
+    return model
