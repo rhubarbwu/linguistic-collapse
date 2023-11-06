@@ -8,8 +8,8 @@ from torch import Tensor
 
 from lib.utils import inner_product, normalize, select_int_type
 
-means_dir = lambda prefix: f"{prefix}-means.pt"
-covs_dir = lambda prefix: f"{prefix}-covs.pt"
+means_path = lambda name: f"means/{name}-means.pt"
+covs_path = lambda name: f"covs/{name}-covs.pt"
 
 
 class Statistics:
@@ -235,7 +235,7 @@ class Statistics:
 
     ## SAVING AND LOADING ##
 
-    def save_totals(self, file: str = "untitled", verbose: bool = False) -> str:
+    def save_totals(self, file: str, verbose: bool = False) -> str:
         self.compute_means()
         data = {
             "hash": self.hash,
@@ -246,8 +246,6 @@ class Statistics:
             "counts": self.counts,
             "totals": self.totals,
         }
-        if not os.path.isfile(file):
-            file = means_dir(file)
         pt.save(data, file)
 
         if verbose:
@@ -255,9 +253,7 @@ class Statistics:
             print(f"  HASH: {self.hash}")
         return file
 
-    def load_totals(self, file: str = "untitled", verbose: bool = True) -> int:
-        if not os.path.isfile(file):
-            file = means_dir(file)
+    def load_totals(self, file: str, verbose: bool = True) -> int:
         if not os.path.isfile(file):
             print(f"  W: file {file} not found; need to collect means from scratch")
             return 0
@@ -276,7 +272,7 @@ class Statistics:
             print(f"LOADED means from {file}; {self.N1} in {self.N1_seqs} seqs")
         return self.N1_seqs
 
-    def save_covs_sums(self, file: str = "untitled", verbose: bool = False) -> str:
+    def save_covs_sums(self, file: str, verbose: bool = False) -> str:
         data = {
             "hash": self.hash,
             "C": self.C,
@@ -286,8 +282,6 @@ class Statistics:
             "sum_between": self.sum_between,
             "sum_within": self.sum_within,
         }
-        if not os.path.isfile(file):
-            file = covs_dir(file)
         pt.save(data, file)
 
         if verbose:
@@ -295,10 +289,7 @@ class Statistics:
             print(f"  MEANS HASH: {self.hash}")
         return file
 
-    def load_covs_sums(self, file: str = "untitled", verbose: bool = True) -> int:
-        if not os.path.isfile(file):
-            file = covs_dir(file)
-
+    def load_covs_sums(self, file: str, verbose: bool = True) -> int:
         means_file = file.replace("covs", "means")
         if not self.load_totals(means_file, False):
             print("  W: means not found; please collect them first")

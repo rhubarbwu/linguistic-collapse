@@ -30,7 +30,9 @@ from itertools import chain
 
 import datasets
 import evaluate
+import torch as pt
 import transformers
+from tqdm import tqdm
 from transformers import (HfArgumentParser, Trainer, TrainingArguments,
                           default_data_collator, is_torch_tpu_available,
                           set_seed)
@@ -38,8 +40,9 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
+from lib.collection import CollectArguments, collect_embeddings, process_batch
 from lib.data import DataArguments
-from lib.model import ModelArguments
+from lib.model import ModelArguments, strip_model
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.35.0.dev0")
@@ -57,15 +60,22 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
+    parser = HfArgumentParser(
+        (ModelArguments, DataArguments, TrainingArguments, CollectArguments)
+    )
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, train_args = parser.parse_json_file(
+        model_args, data_args, train_args, coll_args = parser.parse_json_file(
             json_file=os.path.abspath(sys.argv[1])
         )
     else:
-        model_args, data_args, train_args = parser.parse_args_into_dataclasses()
+        (
+            model_args,
+            data_args,
+            train_args,
+            coll_args,
+        ) = parser.parse_args_into_dataclasses()
 
     if model_args.use_auth_token is not None:
         warnings.warn(
@@ -241,6 +251,11 @@ def main():
             labels = labels[:, 1:].reshape(-1)
             preds = preds[:, :-1].reshape(-1)
             return metric.compute(predictions=preds, references=labels)
+
+    if model_args.model_name_or_path and True:
+        pt.set_grad_enabled(False)
+        collect_embeddings(coll_args, model_args, model, lm_datasets["train"])
+        exit()
 
     # Initialize our Trainer
     trainer = Trainer(

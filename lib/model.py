@@ -1,8 +1,10 @@
+import os
 from dataclasses import dataclass, field
 from logging import Logger
 from typing import Optional
 
 import torch as pt
+from torch.nn import Identity
 from transformers import (CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING,
                           AutoConfig, AutoModelForCausalLM, AutoTokenizer)
 
@@ -200,3 +202,21 @@ def get_model(
         )
 
     return model
+
+
+def strip_model(args: ModelArguments, model: AutoModelForCausalLM, device: str = "cpu"):
+    C, D = model.lm_head.out_features, model.lm_head.in_features
+    W = list(model.lm_head.parameters())[0].detach()
+    del model.lm_head
+    model.lm_head = Identity()
+
+    classifier_file = f"{args.model_name_or_path}-classifier.pt"
+    if not os.path.exists(classifier_file):
+        print(
+            f"caching weights for {args.model_name_or_path} in {classifier_file}",
+            flush=True,
+        )
+        pt.save(W, classifier_file)
+
+    model.to(device)
+    return model, C, D
