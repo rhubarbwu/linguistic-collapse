@@ -22,7 +22,7 @@ def set_vis_args(parser: ArgumentParser):
 
 def plot_histogram(ax: Axes, hist: Tensor, edges: Tensor, label: str, color: Any):
     hist, edges = hist.cpu().numpy(), edges.cpu().numpy()
-    ax.axvline(0, color="black", linestyle="--", linewidth=1)
+    ax.axvline(0, color="black", linestyle="--", linewidth=0.5)
     ax.hist(
         edges[:-1],
         edges,
@@ -33,6 +33,7 @@ def plot_histogram(ax: Axes, hist: Tensor, edges: Tensor, label: str, color: Any
         histtype="step",
         density=True,
     )
+    plt.close()
 
 
 def plot_graph(
@@ -45,8 +46,9 @@ def plot_graph(
     points = points.cpu()
     ax.plot(points, label=label, color=color, markersize=0.5)
     if intercept:
-        ax.axvline(intercept[0], color=color, linestyle="--", linewidth=0.5)
-        ax.axhline(intercept[1], color=color, linestyle="--", linewidth=0.5)
+        ax.axvline(intercept[0], color=color, linestyle="--", linewidth=0.2)
+        ax.axhline(intercept[1], color=color, linestyle="--", linewidth=0.2)
+    plt.close()
 
 
 def plot_scatters(
@@ -77,3 +79,15 @@ def plot_scatters(
         title = f"{title} ({iden})"
     ax.set_title(title)
     fig.savefig(path)
+
+    plt.close()
+
+
+def get_shade(color: str, index: int, total: int, floor: float = 0.65) -> str:
+    r, g, b = [int(color[i : i + 2], 16) for i in (1, 3, 5)]
+
+    brightness = floor + (total - index) * (1 - floor) / total
+    r, g, b = [int(c * brightness) for c in (r, g, b)]
+
+    shade = f"#{r:02x}{g:02x}{b:02x}"
+    return shade

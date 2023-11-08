@@ -94,6 +94,8 @@ def collect_embeddings(
 ):
     pt.set_grad_enabled(False)
 
+    extract = lambda i: pt.tensor(data[i]["input_ids"], dtype=pt.int32)
+
     means_dir = f"{coll_args.stats_dir}/means"
     covs_dir = f"{coll_args.stats_dir}/covs"
 
@@ -108,7 +110,7 @@ def collect_embeddings(
 
     N_seqs = len(data)
     N_batches = int(math.ceil(N_seqs / coll_args.batch_size))
-    extract = lambda i: pt.tensor(data[i]["input_ids"], dtype=pt.int32)
+    N_seen = 0
 
     stats = Statistics(C, D, coll_args.device)
     if coll_args.stage == "means":  # first pass
@@ -117,7 +119,6 @@ def collect_embeddings(
         stats.load_totals(means_path)
         N_seen = stats.load_covs_sums(covs_path)
 
-    N_seen = 0
     N_batches_seen = N_seen // coll_args.batch_size
     if N_seen > 0:
         print(f"skipping {N_seen} sequences ({N_batches_seen} batches) already seen...")

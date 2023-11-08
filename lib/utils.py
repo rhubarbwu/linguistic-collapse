@@ -52,7 +52,7 @@ def clean_up(*garbage: List[Any]):
         pt.cuda.empty_cache()
 
 
-CRUFT = [".pt", "means-", "covs-", "-means", "-covs"]
+CRUFT = ["TS", ".pt", "means-", "covs-", "-means", "-covs"]
 
 
 def identify(path: str) -> str:
@@ -106,9 +106,7 @@ def extract_parts(string: str, delims: Set[str]):
 
 
 def inner_product(
-    data: Tensor,
-    patch_size: int = None,
-    desc: str = "inner prod",
+    data: Tensor, patch_size: int = None, desc: str = "inner prod"
 ) -> Tensor:
     if not patch_size:
         return pt.inner(data, data)

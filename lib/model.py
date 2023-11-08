@@ -1,15 +1,45 @@
 import os
+from argparse import Namespace
 from dataclasses import dataclass, field
 from logging import Logger
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import torch as pt
+from torch import Tensor
 from torch.nn import Identity
 from transformers import (CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING,
                           AutoConfig, AutoModelForCausalLM, AutoTokenizer)
 
+from lib.visualization import get_shade
+
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+
+COLOUR_BASES = [
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+]
+
+DEPTHS = [1, 2, 4, 8, 12]
+WIDTHS = [64, 128, 256, 512, 768, 1024]
+
+
+def get_model_colour(
+    iden: str, depths: List[int], widths: List[int], by_width: bool = False
+) -> str:
+    depth, width = iden.split("x")
+    idx_d, idx_w = depths.index(int(depth)), widths.index(int(width))
+
+    base = COLOUR_BASES[idx_w if by_width else idx_d]
+    shade_idx = idx_d if by_width else idx_w
+    shade_count = len(depths if by_width else widths)
+    shade = get_shade(base, shade_idx, shade_count)
+    return shade
 
 
 @dataclass
@@ -204,7 +234,18 @@ def get_model(
     return model
 
 
-def strip_model(args: ModelArguments, model: AutoModelForCausalLM, device: str = "cpu"):
+def get_classifier_weights(args: Namespace) -> Tensor:
+    classifier_file = f"{args.model_cache}/{args.model_name}-classifier.pt"
+    if not os.path.exists(classifier_file):
+        print(f"classifier weights file for {args.model_name} not found...")
+        return None
+
+    return pt.load(classifier_file, args.device)
+
+
+def strip_model(
+    args: ModelArguments, model: AutoModelForCausalLM, device: str = "cpu"
+) -> Tuple[AutoModelForCausalLM, int, int]:
     C, D = model.lm_head.out_features, model.lm_head.in_features
     W = list(model.lm_head.parameters())[0].detach()
     del model.lm_head

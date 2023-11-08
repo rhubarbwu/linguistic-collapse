@@ -168,12 +168,9 @@ class Statistics:
 
     ## COLLAPSE MEASURES ##
 
-    def coherence(
-        self, idxs: List[int] = None, K: int = 1, patch_size: int = None
-    ) -> Tensor:
+    def coherence(self, idxs: List[int] = None, patch_size: int = None) -> Tensor:
         """Compute coherence between class means.
         idxs: classes to select for subsampled computation.
-        K: number of cluster (regional) means to centre around.
         patch_size: if given, the maximum patch size for memory-constrained environments.
         """
 
@@ -185,7 +182,6 @@ class Statistics:
     def diff_duality(self, weights: Tensor, idxs: List[int] = None) -> pt.float:
         """Compute self-duality (NC3).
         weights (C x D): weights of the linear classifier
-        K: number of cluster (regional) means to centre around.
         idxs: classes to select for subsampled computation.
         """
         means, mean_G = self.compute_means(idxs)
@@ -198,10 +194,7 @@ class Statistics:
         return duality.cpu()
 
     def dot_duality(
-        self,
-        weights: Tensor,
-        idxs: List[int] = None,
-        dims: Tuple[int] = (0, 1),
+        self, weights: Tensor, idxs: List[int] = None, dims: Tuple[int] = (0, 1)
     ) -> Tensor:
         means, mean_G = self.compute_means(idxs)
         diff_normed = normalize(means - mean_G)
