@@ -30,9 +30,8 @@ WIDTHS = [64, 128, 256, 512, 768, 1024]
 
 
 def get_model_colour(
-    iden: str, depths: List[int], widths: List[int], by_width: bool = False
+    depth: str, width: str, depths: List[int], widths: List[int], by_width: bool = False
 ) -> str:
-    depth, width = iden.split("x")
     idx_d, idx_w = depths.index(int(depth)), widths.index(int(width))
 
     base = COLOUR_BASES[idx_w if by_width else idx_d]
@@ -114,7 +113,7 @@ class ModelArguments:
     use_auth_token: bool = field(
         default=None,
         metadata={
-            "help": "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token`."
+            "help": "The `use_auth_token` argument is deprecated and will be removed in v4.34. Please use `token` instead."
         },
     )
     trust_remote_code: bool = field(
@@ -235,9 +234,9 @@ def get_model(
 
 
 def get_classifier_weights(args: Namespace) -> Tensor:
-    classifier_file = f"{args.model_cache}/{args.model_name}-classifier.pt"
+    classifier_file = f"{args.model_cache}/{args.model_name}-cls.pt"
     if not os.path.exists(classifier_file):
-        print(f"classifier weights file for {args.model_name} not found...")
+        print(f"classifier weights file for {classifier_file} not found...")
         return None
 
     return pt.load(classifier_file, args.device)
@@ -251,7 +250,7 @@ def strip_model(
     del model.lm_head
     model.lm_head = Identity()
 
-    classifier_file = f"{args.model_name_or_path}-classifier.pt"
+    classifier_file = f"{args.model_name_or_path}-cls.pt"
     if not os.path.exists(classifier_file):
         print(
             f"caching weights for {args.model_name_or_path} in {classifier_file}",

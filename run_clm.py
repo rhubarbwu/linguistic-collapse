@@ -252,7 +252,7 @@ def main():
             preds = preds[:, :-1].reshape(-1)
             return metric.compute(predictions=preds, references=labels)
 
-    if model_args.model_name_or_path and True:
+    if model_args.model_name_or_path:
         pt.set_grad_enabled(False)
         collect_embeddings(coll_args, model_args, model, lm_datasets["train"])
         exit()

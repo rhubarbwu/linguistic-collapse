@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from torch import Tensor
 
+from lib.statistics import collect_hist
+
 TOO_BIG = 12288
 
 
@@ -80,6 +82,13 @@ def plot_scatters(
     ax.set_title(title)
     fig.savefig(path)
 
+    plt.close()
+
+
+def visualize_matrix(data: Tensor, mat_path: str, figsize=(6, 6)):
+    plt.matshow(data.cpu())
+    plt.colorbar()
+    plt.savefig(mat_path)
     plt.close()
 
 

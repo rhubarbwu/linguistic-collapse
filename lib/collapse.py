@@ -5,11 +5,14 @@ from typing import List, Tuple, Union
 import torch as pt
 import torch.linalg as la
 from torch import Tensor
+from tqdm import tqdm
 
+from lib.statistics import collect_hist, meanify_diag
 from lib.utils import inner_product, normalize, select_int_type
+from lib.visualization import plot_histogram
 
 means_path = lambda name: f"means/{name}-means.pt"
-covs_path = lambda name: f"covs/{name}-covs.pt"
+vars_path = lambda name: f"vars/{name}-vars.pt"
 
 
 class Statistics:
@@ -20,7 +23,7 @@ class Statistics:
         device: Union[str, pt.device] = "cpu",
         dtype: pt.dtype = pt.float32,
         load_means: str = None,
-        load_covs: str = None,
+        load_vars: str = None,
         verbose: bool = True,
     ):
         """
@@ -29,7 +32,7 @@ class Statistics:
         device: which processor to put the tensors on
         dtype: floating point precision
         load_means: file from which to load a means checkpoint
-        load_covs: file from which to load a covariances checkpoint
+        load_vars: file from which to load a covariances checkpoint
         """
 
         self.C, self.D = C, D
@@ -39,28 +42,26 @@ class Statistics:
 
         if load_means:
             self.load_totals(load_means, verbose)
-        if load_covs:
-            self.load_covs_sums(load_covs, verbose)
+        if load_vars:
+            self.load_var_sums(load_vars, verbose)
 
         self.ctype = select_int_type(self.C)
-        if load_means and load_covs:
+        if load_means and load_vars:
             return
 
         if not load_means:
             self.N1, self.N1_seqs = 0, 0  # counts of samples/sequences for means pass
-            self.counts = pt.zeros(self.C, dtype=self.ctype).to(device)
+            self.counts = pt.zeros(self.C, dtype=pt.int32).to(device)
             self.totals = pt.zeros(self.C, self.D, dtype=dtype).to(device)
 
-        if not load_covs:
-            self.N2, self.N2_seqs = 0, 0  # counts of samples/sequences for covs pass
-            self.sum_between = pt.zeros(self.D, self.D, dtype=dtype).to(device)
-            self.sum_within = pt.zeros(self.D, self.D, dtype=dtype).to(device)
+        if not load_vars:
+            self.N2, self.N2_seqs = 0, 0  # counts of samples/sequences for vars pass
+            self.var_sums = pt.zeros(self.C, dtype=dtype).to(device)
 
     def move_to(self, device: str = "cpu"):
         self.counts = self.counts.to(device)
         self.totals = self.counts.to(device)
-        self.sum_between = self.sum_between.to(device)
-        self.sum_within = self.sum_within.to(device)
+        self.var_sums = self.var_sums.to(device)
 
     def counts_in_range(self, minimum: int = 0, maximum: int = None):
         idxs = self.counts.squeeze() >= minimum
@@ -100,7 +101,7 @@ class Statistics:
 
         return self.counts, self.totals
 
-    def collect_covs(self, X: Tensor, Y: Tensor, B: int = 1) -> Tuple[Tensor, Tensor]:
+    def collect_vars(self, X: Tensor, Y: Tensor, B: int = 1) -> Tuple[Tensor, Tensor]:
         """Second pass: increment within/between-class covariance for a batch.
         B: batch size
         X (B x D): feature vectors
@@ -120,25 +121,11 @@ class Statistics:
         self.N2 += Y.shape[0]
         self.N2_seqs += B
 
-        mean_diff = means[Y] - mean_G  # C' x D
-        self.sum_between += pt.matmul(mean_diff.mT, mean_diff)  # D x D
+        diffs = X.to(self.device) - means[Y]
+        Y = Y.to(self.device).to(pt.int64)
+        self.var_sums.scatter_add_(0, Y, pt.sum(diffs * diffs, dim=-1))
 
-        diff = X.to(self.device) - means[Y]  # N x D
-        self.sum_within += pt.matmul(diff.mT, diff)  # D x D
-
-        return self.sum_between, self.sum_within
-
-    def report_stats(self, idxs: List[int] = None, covs: bool = False):
-        means, mean_G = self.compute_means(idxs)
-        print("means count", self.N1)
-        print("class means", means)
-        print("global mean", mean_G)
-
-        if covs:  # second pass
-            print("              covs count", self.N2)
-            cov_between, cov_within = self.compute_covs()
-            print("between-class covariance", cov_between)
-            print(" within-class covariance", cov_within)
+        return self.var_sums
 
     def compute_means(self, idxs: List[int] = None) -> Tuple[Tensor, Tensor]:
         """Compute and store the overall means of the dataset."""
@@ -155,16 +142,28 @@ class Statistics:
 
         return self.means, self.mean_G
 
-    def compute_covs(self) -> Tuple[Tensor, Tensor]:
+    def compute_vars(self, idxs: List[int] = None) -> Tensor:
         """Compute the overall covariances of the dataset."""
 
         if self.N1 != self.N2 or self.N1_seqs != self.N2_seqs:
-            return None, None
+            return None
 
-        cov_between = self.sum_between / (self.N2 + self.eps)  # D x D
-        cov_within = self.sum_within / (self.N2 + self.eps)  # D x D
+        means, _ = self.compute_means(idxs)
 
-        return cov_between, cov_within
+        counts = (self.counts if idxs is None else self.counts[idxs]).unsqueeze(-1)
+        var_sums = (self.var_sums if idxs is None else self.var_sums[idxs]).unsqueeze(-1)
+        C = len(counts)
+        vars_normed = var_sums / counts
+
+        CDNVs = pt.zeros(C, C, dtype=self.dtype, device=self.device)
+
+        for c in tqdm(range(C), desc="cdnvs"):
+            var_avgs = (vars_normed[c] + vars_normed).squeeze() / 2
+            means_diff = means[c] - means
+            inner = pt.sum(means_diff * means_diff, dim=-1)
+            CDNVs[c] = var_avgs.squeeze(0) / inner
+
+        return CDNVs
 
     ## COLLAPSE MEASURES ##
 
@@ -211,21 +210,6 @@ class Statistics:
 
         return result, proj_means, proj_cls
 
-    def inv_snr(self) -> pt.float:
-        """Compute separation fuzziness/signal-to-noise ratio tr{Sw Sb^-1} (NC2)."""
-        if self.N2 == 0:
-            print("  W: no covariances!")
-            return None
-
-        cov_between, cov_within = self.compute_covs()  # D x D, D x D
-        if cov_between is None or cov_within is None:
-            print("  W: means and covariances counts don't match!")
-            return None
-
-        cov_between_inv = la.pinv(cov_between)
-        snr_inv = pt.trace(cov_within @ cov_between_inv)  # 0 (scalar)
-        return snr_inv.cpu()
-
     ## SAVING AND LOADING ##
 
     def save_totals(self, file: str, verbose: bool = False) -> str:
@@ -265,50 +249,65 @@ class Statistics:
             print(f"LOADED means from {file}; {self.N1} in {self.N1_seqs} seqs")
         return self.N1_seqs
 
-    def save_covs_sums(self, file: str, verbose: bool = False) -> str:
+    def save_var_sums(self, file: str, verbose: bool = False) -> str:
         data = {
             "hash": self.hash,
             "C": self.C,
             "D": self.D,
             "N": self.N2,
             "N_seqs": self.N2_seqs,
-            "sum_between": self.sum_between,
-            "sum_within": self.sum_within,
+            "var_sums": self.var_sums,
         }
         pt.save(data, file)
 
         if verbose:
-            print(f"SAVED covs to {file}; {self.N2} in {self.N2_seqs} seqs")
+            print(f"SAVED vars to {file}; {self.N2} in {self.N2_seqs} seqs")
             print(f"  MEANS HASH: {self.hash}")
         return file
 
-    def load_covs_sums(self, file: str, verbose: bool = True) -> int:
-        means_file = file.replace("covs", "means")
+    def load_var_sums(self, file: str, verbose: bool = True) -> int:
+        means_file = file.replace("vars", "means")
         if not self.load_totals(means_file, False):
             print("  W: means not found; please collect them first")
             return 0
 
         if not os.path.isfile(file):
-            print(f"  W: path {file} not found; need to collect covs from scratch")
+            print(f"  W: path {file} not found; need to collect vars from scratch")
             return 0
 
         data = pt.load(file, self.device)
-        assert data["hash"] == self.hash, "covs based on outdated means"
+        assert data["hash"] == self.hash, "vars based on outdated means"
 
         self.C, self.D = data["C"], data["D"]
         self.N2 = data["N"]
         self.N2_seqs = data["N_seqs"]
-        self.sum_between = data["sum_between"].to(self.device)
-        self.sum_within = data["sum_within"].to(self.device)
+        self.var_sums = data["var_sums"].to(self.device)
 
         if verbose:
-            print(f"LOADED covs from {file}; {self.N2} in {self.N2_seqs} seqs")
+            print(f"LOADED vars from {file}; {self.N2} in {self.N2_seqs} seqs")
         return self.N2_seqs
 
 
 if __name__ == "__main__":
+    pt.set_grad_enabled(False)
+
+    import os
     from math import ceil, log
     from sys import argv
+
+    import matplotlib.pyplot as plt
+
+    means_file, vars_file = "dummy-means.pt", "dummy-vars.pt"
+    if os.path.exists(means_file):
+        os.remove(means_file)
+    if os.path.exists(vars_file):
+        os.remove(vars_file)
+
+    matshow_path, hist_path = "cdnvs_mat.png", "cdnvs_hist.png"
+    if os.path.exists(matshow_path):
+        os.remove(matshow_path)
+    if os.path.exists(hist_path):
+        os.remove(hist_path)
 
     dtype = pt.float32
     device = pt.device("cuda" if pt.cuda.is_available() else "cpu")
@@ -320,7 +319,7 @@ if __name__ == "__main__":
     if N < ceil(-C * log(0.01)):
         print(f"W: {N} samples may not be enough...")
 
-    Y = pt.randint(C, (N,))
+    Y = pt.randint(C, (N,), dtype=pt.int32)
     X = (pt.randn(N, D, dtype=dtype) + pt.randn(C, D)[Y, :]).to(device)
     print(f"created: X {X.shape}, Y {Y.shape}")
 
@@ -330,36 +329,39 @@ if __name__ == "__main__":
         batch, labels = X[i : i + B], Y[i : i + B]
         stats.collect_means(batch, labels, B)
 
-    stats.save_totals()
-    stats.load_totals()
-    stats.compute_means()  # would be implicitly called in compute_covs()
-
-    print("collecting covs")
-    for i in range(0, N - B, B):
-        batch, labels = X[i : i + B], Y[i : i + B]
-        stats.collect_covs(batch, labels, B)
-
-    stats.save_covs_sums()
-    stats.load_covs_sums()
-
-    cov_b, cov_w = stats.compute_covs()
-    assert cov_b is None, cov_w is None
-
-    stats.collect_covs(X[-B:], Y[-B:], B)
-    cov_b, cov_w = stats.compute_covs()
-
-    gram = X.mT @ X / stats.N1
-    lda_sum = stats.mean_G.T @ stats.mean_G + cov_b + cov_w
-    if not pt.allclose(gram, lda_sum, rtol=1e-4, atol=1e-7):
-        print("data is unusual: gram != LDA")
-    del cov_b, cov_w, X, Y, gram, lda_sum
-
-    inv_snr = stats.inv_snr()
-    print("inverse SNR:", inv_snr)
-
+    stats.save_totals(means_file)
+    stats.load_totals(means_file)
     W = pt.randn(C, D, dtype=dtype)
-    duality = stats.self_duality(W)
+    duality = stats.diff_duality(W)
     print("self-duality:", duality)
 
-    coherence = stats.coherence()
-    print("coherence:", coherence)
+    inner = meanify_diag(stats.coherence())
+    hist, edges = collect_hist(inner, triu=True, desc="coh hist")
+    print("coherence:", inner.std().cpu() / inner.mean().cpu())
+
+    ## Variances ##
+
+    print("collecting vars")
+    for i in range(0, N - B, B):
+        batch, labels = X[i : i + B], Y[i : i + B]
+        stats.collect_vars(batch, labels, B)
+    stats.save_var_sums(vars_file)
+    stats.load_var_sums(vars_file)
+    stats.collect_vars(X[-B:], Y[-B:], B)
+
+    # class-distance normalized variances (CDNVS)
+    CDNVs = meanify_diag(stats.compute_vars())
+
+    plt.matshow(CDNVs.cpu())
+    plt.colorbar()
+    plt.savefig(matshow_path)
+    plt.close()
+
+    hist, edges = collect_hist(CDNVs, 1024, True)
+    fig, ax = plt.subplots(figsize=(3, 2))
+    plot_histogram(ax, hist, edges, "dummy", "#000000")
+    fig.savefig(hist_path)
+
+    CDNVs = meanify_diag(CDNVs)
+    inv_snr = CDNVs.std().cpu() / CDNVs.mean().cpu()
+    print("inverse SNR:", inv_snr)

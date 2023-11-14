@@ -74,9 +74,17 @@ def compute_centroids(
     return labels, centroids
 
 
+def meanify_diag(data: Tensor) -> Tensor:
+    assert pt.all(pt.tensor(data.shape) == data.shape[0])
+    data.fill_diagonal_(0)
+    mean = data.sum() / (data.shape[0] * (data.shape[0] - 1))
+    data.fill_diagonal_(mean)
+    return data
+
+
 def collect_hist(
     data: Tensor,
-    num_bins: int,
+    num_bins: int = 64,
     triu: bool = False,
     desc: str = "histogram",
 ) -> Tuple[Tensor, Tensor]:

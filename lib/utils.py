@@ -52,7 +52,7 @@ def clean_up(*garbage: List[Any]):
         pt.cuda.empty_cache()
 
 
-CRUFT = ["TS", ".pt", "means-", "covs-", "-means", "-covs"]
+CRUFT = ["TS", ".pt", "means-", "vars-", "-means", "-vars"]
 
 
 def identify(path: str) -> str:
@@ -73,15 +73,15 @@ def pathify(identifier: str, stats_dir: str) -> Tuple[str, str]:
             return None, None
     means_path = means_path.replace("//", "/")
 
-    covs_path = f"{stats_dir}/covs-{identifier}.pt"
-    if not isfile(covs_path):
-        covs_path = f"{stats_dir}/{identifier}-covs.pt"
-        if not isfile(covs_path):
-            covs_path = None
+    vars_path = f"{stats_dir}/vars-{identifier}.pt"
+    if not isfile(vars_path):
+        vars_path = f"{stats_dir}/{identifier}-vars.pt"
+        if not isfile(vars_path):
+            vars_path = None
 
-    covs_path = None if covs_path is None else covs_path.replace("//", "/")
+    vars_path = None if vars_path is None else vars_path.replace("//", "/")
 
-    return means_path, covs_path
+    return means_path, vars_path
 
 
 def scrub(string: str, antis: List[str]):

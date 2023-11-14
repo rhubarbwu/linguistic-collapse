@@ -72,9 +72,9 @@ def process_batch(
         output_hidden_states=False,
     )
 
-    embeds = output.logits.to(stats_device)
+    embeds = output.logits
     if masks is not None:
-        embeds = pt.unsqueeze(masks, -1) * embeds
+        embeds = pt.unsqueeze(masks.to(embeds.device), -1) * embeds
 
     # offset by one for the next word prediction
     Y = batch[:, 1:].to(stats_device)
@@ -97,16 +97,16 @@ def collect_embeddings(
     extract = lambda i: pt.tensor(data[i]["input_ids"], dtype=pt.int32)
 
     means_dir = f"{coll_args.stats_dir}/means"
-    covs_dir = f"{coll_args.stats_dir}/covs"
+    vars_dir = f"{coll_args.stats_dir}/vars"
 
     makedirs(coll_args.stats_dir, exist_ok=True)
     makedirs(means_dir, exist_ok=True)
-    makedirs(covs_dir, exist_ok=True)
+    makedirs(vars_dir, exist_ok=True)
 
     model, C, D = strip_model(model_args, model, coll_args.device)
     model_name = model_args.model_name_or_path.split("/")[-1]
     means_path = f"{means_dir}/{model_name}-means.pt"
-    covs_path = f"{covs_dir}/{model_name}-covs.pt"
+    vars_path = f"{vars_dir}/{model_name}-vars.pt"
 
     N_seqs = len(data)
     N_batches = int(math.ceil(N_seqs / coll_args.batch_size))
@@ -115,9 +115,9 @@ def collect_embeddings(
     stats = Statistics(C, D, coll_args.device)
     if coll_args.stage == "means":  # first pass
         N_seen = stats.load_totals(means_path)
-    elif coll_args.stage == "covs":  # second pass
+    elif coll_args.stage == "vars":  # second pass
         stats.load_totals(means_path)
-        N_seen = stats.load_covs_sums(covs_path)
+        N_seen = stats.load_var_sums(vars_path)
 
     N_batches_seen = N_seen // coll_args.batch_size
     if N_seen > 0:
@@ -126,25 +126,24 @@ def collect_embeddings(
         start = b_idx * coll_args.batch_size
         end = min(start + coll_args.batch_size, N_seqs)
         batch = [extract(i) for i in range(start, end)]
-        X, Y = process_batch(model, batch)
-
+        X, Y = process_batch(model, batch, coll_args.device)
         if coll_args.stage == "means":  # first pass
             stats.collect_means(X, Y, len(batch))
-        elif coll_args.stage == "covs":  # second pass
-            stats.collect_covs(X, Y, len(batch))
+        elif coll_args.stage == "vars":  # second pass
+            stats.collect_vars(X, Y, len(batch))
 
         if (b_idx + 1) % (coll_args.save_every // coll_args.batch_size) != 0:
             continue  # don't save on most iterations
 
         if coll_args.stage == "means":
             stats.save_totals(means_path, coll_args.verbose)
-        elif coll_args.stage == "covs":
-            stats.save_covs_sums(covs_path, coll_args.verbose)
+        elif coll_args.stage == "vars":
+            stats.save_var_sums(vars_path, coll_args.verbose)
 
         if coll_args.single:
             break
 
     if coll_args.stage == "means":
         stats.save_totals(means_path, coll_args.verbose)
-    elif coll_args.stage == "covs":
-        stats.save_covs_sums(covs_path, coll_args.verbose)
+    elif coll_args.stage == "vars":
+        stats.save_var_sums(vars_path, coll_args.verbose)

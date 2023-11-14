@@ -9,10 +9,10 @@ import torch as pt
 from lib.collapse import Statistics
 from lib.model import (COLOUR_BASES, DEPTHS, get_classifier_weights,
                        get_model_colour)
-from lib.statistics import collect_hist
+from lib.statistics import collect_hist, meanify_diag
 from lib.utils import MAG_STRS, MAGS, identify, inner_product
 from lib.visualization import (TOO_BIG, plot_graph, plot_histogram,
-                               plot_scatters, set_vis_args)
+                               plot_scatters, set_vis_args, visualize_matrix)
 
 pt.set_grad_enabled(False)
 
@@ -46,6 +46,7 @@ parser.add_argument("-mpc", "--min_per_class", type=int, default=1)
 parser.add_argument("-Mpc", "--max_per_class", type=int, default=None)
 parser.add_argument("-ps", "--patch_size", type=int, default=1024)
 parser.add_argument("-d", "--dims", type=int, nargs=2, default=None)
+parser.add_argument("-split", "--split_char", type=str, default="x")
 
 set_vis_args(parser)
 args = parser.parse_args()
@@ -71,8 +72,8 @@ for file in args.input_files:
         PATHS[iden] = (None, None)
 
     means_path = file if "means" in file else PATHS[iden][0]
-    covs_path = file if "covs" in file else PATHS[iden][1]
-    PATHS[iden] = (means_path, covs_path)
+    vars_path = file if "vars" in file else PATHS[iden][1]
+    PATHS[iden] = (means_path, vars_path)
 
 
 if args.progress:
@@ -82,11 +83,11 @@ if args.analysis:
     STATISTICS = {}
 
 INCOMPLETE = []
-for iden, (means_path, covs_path) in PATHS.items():
+for iden, (means_path, vars_path) in PATHS.items():
     collected = Statistics(
         device=args.device,
         load_means=means_path,
-        load_covs=covs_path,
+        load_vars=vars_path,
         verbose=False,
     )
     Ns = (collected.N1, collected.N1_seqs, collected.N2, collected.N2_seqs)
@@ -104,14 +105,14 @@ for iden, (means_path, covs_path) in PATHS.items():
 
 
 if SORT_BY_WIDTH:
-    IDENTIFIERS = sorted(PATHS.keys(), key=lambda x: int(x.split("x")[1]))
+    IDENTIFIERS = sorted(PATHS.keys(), key=lambda x: int(x.split(args.split_char)[1]))
 else:
     IDENTIFIERS = sorted(PATHS.keys())
 LONGEST_IDEN = max(5, max([len(iden) for iden in IDENTIFIERS]))
 
 if args.progress:
     print(LINE_SEP)
-    head = [p.rjust(COL_WIDTH) for p in ["means", "(seqs)", "covs", "(seqs)", "unique"]]
+    head = [p.rjust(COL_WIDTH) for p in ["means", "(seqs)", "vars", "(seqs)", "unique"]]
     print("".ljust(LONGEST_IDEN + 1), *head)
     for iden in IDENTIFIERS:
         Ns = PROGRESS[iden]
@@ -132,16 +133,16 @@ for iden in INCOMPLETE:
 
 
 ANALYTICS = {}
-GROUPS_BY_DEPTH, GROUPS_BY_WIDTH = {depth: [] for depth in DEPTHS}, {}
+BY_DEPTH, BY_WIDTH = {depth: [] for depth in DEPTHS}, {}
 for iden in IDENTIFIERS:
     if iden not in STATISTICS:
         continue
 
-    for prop_str, grouping in zip(iden.split("x"), [GROUPS_BY_DEPTH, GROUPS_BY_WIDTH]):
+    for prop_str, group in zip(iden.split(args.split_char), [BY_DEPTH, BY_WIDTH]):
         prop_val = int(prop_str)
-        if prop_val not in grouping:
-            grouping[prop_val] = []
-        grouping[prop_val].append(iden)
+        if prop_val not in group:
+            group[prop_val] = []
+        group[prop_val].append(iden)
 
     collected: Statistics = STATISTICS[iden]
     indices = collected.counts_in_range(args.min_per_class, args.max_per_class)
@@ -172,16 +173,13 @@ for iden in IDENTIFIERS:
     if args.coherence:
         inner = collected.coherence(indices, args.patch_size)
         hist, edges = collect_hist(inner, args.num_bins, True, desc="coh hist")
-        coh_mean = inner.sum() / (inner.shape[0] * (inner.shape[0] - 1))
-        inner.fill_diagonal_(coh_mean)
-        coh_std = inner.std()
-        del inner
-
         ANALYTICS[iden]["coh_hist"] = (hist, edges)
-        ANALYTICS[iden]["coh_mean"] = coh_mean.cpu()
-        ANALYTICS[iden]["coh_std"] = coh_std.cpu()
-        ANALYTICS[iden]["coh_cv"] = coh_std.cpu() / coh_mean.cpu()
-        del coh_mean, coh_std, hist, edges
+
+        inner = meanify_diag(inner)
+        ANALYTICS[iden]["coh_mean"] = inner.mean().cpu()
+        ANALYTICS[iden]["coh_std"] = inner.std().cpu()
+        ANALYTICS[iden]["coh_cv"] = inner.std().cpu() / inner.mean().cpu()
+        del inner, hist, edges
 
     if args.duality:
         args.model_name = f"TS{iden}"
@@ -199,7 +197,18 @@ for iden in IDENTIFIERS:
         del W
 
     if args.inv_snr:
-        ANALYTICS[iden]["inv_snr"] = collected.inv_snr()
+        CDNVs = collected.compute_vars(indices)
+        if CDNVs is not None and collected.N2 == args.totals[0]:
+            meanify_diag(CDNVs)
+            CDNVs = pt.log(CDNVs)
+            # CDNVs = CDNVs[CDNVs > 1e-4].unsqueeze(0)
+
+            ANALYTICS[iden]["inv_snr"] = CDNVs.std().cpu() / CDNVs.mean().cpu()
+            ANALYTICS[iden]["inv_snr_hist"] = collect_hist(CDNVs, args.num_bins, True)
+            if args.each_model:
+                matpath = f"{args.output_dir}/cdnv-{iden}.{args.fig_format}"
+                visualize_matrix(CDNVs, matpath)
+            del CDNVs
 
     del collected
 
@@ -221,16 +230,12 @@ if args.min_per_class:
 def plot_statistic(measure: str, key: str):
     fig, ax = plt.subplots(figsize=args.fig_size)
 
-    for depth, values in sorted(GROUPS_BY_DEPTH.items()):
-        if SORT_BY_WIDTH:
-            nums = [int(iden.split("x")[1]) for iden in values]
-        else:
-            nums = [int(iden.split("x")[0]) for iden in values]
-
-        vals = [
-            None if key not in ANALYTICS[iden] else ANALYTICS[iden][key].cpu()
-            for iden in values
-        ]
+    for depth, values in sorted(BY_DEPTH.items()):
+        nums, vals = [], []
+        for iden in values:
+            if iden in ANALYTICS and key in ANALYTICS[iden]:
+                nums.append(int(iden.split(args.split_char)[1 if SORT_BY_WIDTH else 0]))
+                vals.append(ANALYTICS[iden][key])
 
         ax.scatter(
             *(nums, vals),
@@ -272,9 +277,9 @@ def plot_arrays(
             continue
 
         label, color = iden, get_model_colour(
-            iden,
-            list(GROUPS_BY_DEPTH.keys()),
-            list(GROUPS_BY_WIDTH.keys()),
+            *iden.split(args.split_char),
+            list(BY_DEPTH.keys()),
+            list(BY_WIDTH.keys()),
             SORT_BY_WIDTH,
         )
         if "hist" in measure:
@@ -323,8 +328,8 @@ def plot_freqs_norms(selected: str = None):
 
 def plot_dual_scatters(prefix: str, measure: str):
     for iden in IDENTIFIERS:
-        depth, width = iden.split("x")
-        path = f"{args.output_dir}/{prefix}-{iden}.png"
+        depth, width = iden.split(args.split_char)
+        path = f"{args.output_dir}/{prefix}-{iden}.{args.fig_format}"
         proj_m, proj_c = ANALYTICS[iden][measure]
         plot_scatters(
             *(proj_c.cpu(), proj_m.cpu()),
@@ -338,7 +343,7 @@ def plot_dual_scatters(prefix: str, measure: str):
 if args.eigenvalues:
     plot_arrays("Eigenvalues of Outer Products of Means", "eig_vals", yscale="log")
 if args.norms:
-    plot_statistic("Norms of Means (CV)", "norms_cv")
+    plot_statistic("Norms of Means (CoV)", "norms_cv")
     plot_arrays("Norms of Means (Histogram)", "norms_hist")
     if args.each_model:
         for iden in IDENTIFIERS:
@@ -347,7 +352,7 @@ if args.norms:
 if args.coherence:
     plot_statistic("Coherence (mean)", "coh_mean")
     plot_statistic("Coherence (stddev)", "coh_std")
-    plot_statistic("Coherence (CV)", "coh_cv")
+    plot_statistic("Coherence (CoV)", "coh_cv")
     plot_arrays("Interference of Means", "coh_hist", "Values (Off-Diagonals)")
 if args.duality:
     plot_statistic("Self-Duality (Difference)", "dual_diff")
@@ -361,6 +366,7 @@ if args.duality:
         plot_dual_scatters("dual_dot", "dual_dot_projs")
 
 if args.inv_snr:
-    plot_statistic("Inverse Signal-to-Noise Ratio", "inv_snr")
+    plot_statistic("Inverse Signal-to-Noise Ratio (CoV)", "inv_snr")
+    plot_arrays("Inverse Signal-to-Noise Ratio (Histogram)", "inv_snr_hist")
 
 print(LINE_SEP)
