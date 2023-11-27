@@ -62,7 +62,7 @@ def identify(path: str) -> str:
         if cruft in identifier:
             cruft_matches += 1
         identifier = identifier.replace(cruft, "")
-    return identifier if cruft_matches >= 2 else None
+    return identifier
 
 
 def pathify(identifier: str, stats_dir: str) -> Tuple[str, str]:

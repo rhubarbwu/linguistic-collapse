@@ -2,13 +2,14 @@ from argparse import ArgumentParser
 from os import makedirs
 from os.path import exists, isfile
 from random import sample
+from typing import Tuple
 
 import matplotlib.pyplot as plt
 import torch as pt
 
 from lib.collapse import Statistics
 from lib.model import (COLOUR_BASES, DEPTHS, get_classifier_weights,
-                       get_model_colour)
+                       get_model_colour, split_parts)
 from lib.statistics import collect_hist, meanify_diag
 from lib.utils import MAG_STRS, MAGS, identify, inner_product
 from lib.visualization import (TOO_BIG, plot_graph, plot_histogram,
@@ -55,7 +56,7 @@ if "cuda" in args.device and not pt.cuda.is_available():
     print(f"W: CUDA device {args.device} unavailable; defaulting to CPU")
     args.device = "cpu"
 
-SORT_BY_WIDTH = "dim" in args.sort_by or "wid" in args.sort_by
+SORT_WIDTH = "dim" in args.sort_by or "wid" in args.sort_by
 
 if args.analysis:
     args.eigenvalues = args.norms = args.coherence = args.inv_snr = args.duality = True
@@ -104,16 +105,13 @@ for iden, (means_path, vars_path) in PATHS.items():
     del collected
 
 
-if SORT_BY_WIDTH:
-    IDENTIFIERS = sorted(PATHS.keys(), key=lambda x: int(x.split(args.split_char)[1]))
-else:
-    IDENTIFIERS = sorted(PATHS.keys())
+IDENTIFIERS = sorted(PATHS.keys(), key=lambda x: split_parts(x)[1 if SORT_WIDTH else 0])
 LONGEST_IDEN = max(5, max([len(iden) for iden in IDENTIFIERS]))
 
 if args.progress:
     print(LINE_SEP)
     head = [p.rjust(COL_WIDTH) for p in ["means", "(seqs)", "vars", "(seqs)", "unique"]]
-    print("".ljust(LONGEST_IDEN + 1), *head)
+    print("model".ljust(LONGEST_IDEN + 1), *head)
     for iden in IDENTIFIERS:
         Ns = PROGRESS[iden]
         row = [str(n).rjust(COL_WIDTH) for n in Ns]
@@ -138,7 +136,7 @@ for iden in IDENTIFIERS:
     if iden not in STATISTICS:
         continue
 
-    for prop_str, group in zip(iden.split(args.split_char), [BY_DEPTH, BY_WIDTH]):
+    for prop_str, group in zip(split_parts(iden)[:2], [BY_DEPTH, BY_WIDTH]):
         prop_val = int(prop_str)
         if prop_val not in group:
             group[prop_val] = []
@@ -184,17 +182,17 @@ for iden in IDENTIFIERS:
     if args.duality:
         args.model_name = f"TS{iden}"
         W = get_classifier_weights(args)
+        if W is not None:
+            dual_diff = collected.diff_duality(W, indices)
+            ANALYTICS[iden]["dual_diff"] = dual_diff.mean().cpu()
 
-        dual_diff = collected.diff_duality(W, indices)
-        ANALYTICS[iden]["dual_diff"] = dual_diff.mean().cpu()
+            dual_dot, proj_m, proj_c = collected.dot_duality(W, indices, args.dims)
+            ANALYTICS[iden]["dual_dot_projs"] = proj_m, proj_c
+            ANALYTICS[iden]["dual_dot"] = dual_dot.mean().cpu()
 
-        dual_dot, proj_m, proj_c = collected.dot_duality(W, indices, args.dims)
-        ANALYTICS[iden]["dual_dot_projs"] = proj_m, proj_c
-        ANALYTICS[iden]["dual_dot"] = dual_dot.mean().cpu()
-
-        dual_dot_hist = collect_hist(dual_dot, args.num_bins, desc="dual hist")
-        ANALYTICS[iden]["dual_hist"] = dual_dot_hist
-        del W
+            dual_dot_hist = collect_hist(dual_dot, args.num_bins, desc="dual hist")
+            ANALYTICS[iden]["dual_hist"] = dual_dot_hist
+            del W
 
     if args.inv_snr:
         CDNVs = collected.compute_vars(indices)
@@ -234,7 +232,7 @@ def plot_statistic(measure: str, key: str):
         nums, vals = [], []
         for iden in values:
             if iden in ANALYTICS and key in ANALYTICS[iden]:
-                nums.append(int(iden.split(args.split_char)[1 if SORT_BY_WIDTH else 0]))
+                nums.append(split_parts(iden)[1 if SORT_WIDTH else 0])
                 vals.append(ANALYTICS[iden][key])
 
         ax.scatter(
@@ -249,7 +247,7 @@ def plot_statistic(measure: str, key: str):
 
     ax.legend()
     ax.set_ylabel(measure.lower())
-    if SORT_BY_WIDTH:
+    if SORT_WIDTH:
         ax.set_title(f"{measure} vs. Model Size{range_str}")
         ax.set_xlabel(f"Hidden Dimension")
     else:
@@ -277,10 +275,10 @@ def plot_arrays(
             continue
 
         label, color = iden, get_model_colour(
-            *iden.split(args.split_char),
+            *split_parts(iden)[:2],
             list(BY_DEPTH.keys()),
             list(BY_WIDTH.keys()),
-            SORT_BY_WIDTH,
+            SORT_WIDTH,
         )
         if "hist" in measure:
             plot_histogram(ax, *array, label, color)

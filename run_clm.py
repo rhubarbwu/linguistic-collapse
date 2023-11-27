@@ -151,7 +151,7 @@ def main():
 
     config = get_config(model_args, logger)
     tokenizer = get_tokenizer(model_args)
-    model = get_model(model_args, config, logger)
+    model = get_model(model_args, config, logger, (coll_args.model_ckpt_idx))
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
@@ -161,9 +161,7 @@ def main():
 
     from lib.data import tokenize_dataset
 
-    tokenized_datasets = tokenize_dataset(
-        train_args, data_args, tokenizer, raw_datasets
-    )
+    tokenized_data = tokenize_dataset(train_args, data_args, tokenizer, raw_datasets)
 
     if data_args.block_size is None:
         block_size = tokenizer.model_max_length
@@ -206,7 +204,7 @@ def main():
 
     with train_args.main_process_first(desc="grouping texts together"):
         if not data_args.streaming:
-            lm_datasets = tokenized_datasets.map(
+            lm_datasets = tokenized_data.map(
                 group_texts,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
@@ -214,13 +212,13 @@ def main():
                 desc=f"Grouping texts in chunks of {block_size}",
             )
         else:
-            lm_datasets = tokenized_datasets.map(
+            lm_datasets = tokenized_data.map(
                 group_texts,
                 batched=True,
             )
 
     if train_args.do_train:
-        if "train" not in tokenized_datasets:
+        if "train" not in tokenized_data:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = lm_datasets["train"]
         if data_args.max_train_samples is not None:
@@ -228,7 +226,7 @@ def main():
             train_dataset = train_dataset.select(range(max_train_samples))
 
     if train_args.do_eval:
-        if "validation" not in tokenized_datasets:
+        if "validation" not in tokenized_data:
             raise ValueError("--do_eval requires a validation dataset")
         eval_dataset = lm_datasets["validation"]
         if data_args.max_eval_samples is not None:
@@ -255,7 +253,6 @@ def main():
     if model_args.model_name_or_path:
         pt.set_grad_enabled(False)
         collect_embeddings(coll_args, model_args, model, lm_datasets["train"])
-        exit()
 
     # Initialize our Trainer
     trainer = Trainer(
@@ -334,7 +331,7 @@ def main():
 
     if train_args.push_to_hub:
         trainer.push_to_hub(**kwargs)
-    else:
+    elif not model_args.model_name_or_path:
         trainer.create_model_card(**kwargs)
 
 

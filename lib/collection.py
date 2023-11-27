@@ -24,6 +24,10 @@ class CollectArguments:
         default="cpu",
         metadata={"help": ("Device to run the collection on.")},
     )
+    model_ckpt_idx: Optional[int] = field(
+        default=9,
+        metadata={"help": ("Which checkpoint (by list index) to load for the model.")},
+    )
     save_every: Optional[int] = field(
         default=1024,
         metadata={"help": ("How often to save stats.")},
@@ -87,63 +91,63 @@ def process_batch(
 
 
 def collect_embeddings(
-    coll_args: CollectArguments,
+    args: CollectArguments,
     model_args: ModelArguments,
     model: AutoModelForCausalLM,
     data: Dataset,
 ):
     pt.set_grad_enabled(False)
 
-    extract = lambda i: pt.tensor(data[i]["input_ids"], dtype=pt.int32)
+    means_dir = f"{args.stats_dir}/means@{args.model_ckpt_idx}"
+    vars_dir = f"{args.stats_dir}/vars@{args.model_ckpt_idx}"
 
-    means_dir = f"{coll_args.stats_dir}/means"
-    vars_dir = f"{coll_args.stats_dir}/vars"
-
-    makedirs(coll_args.stats_dir, exist_ok=True)
+    makedirs(args.stats_dir, exist_ok=True)
     makedirs(means_dir, exist_ok=True)
     makedirs(vars_dir, exist_ok=True)
 
-    model, C, D = strip_model(model_args, model, coll_args.device)
     model_name = model_args.model_name_or_path.split("/")[-1]
-    means_path = f"{means_dir}/{model_name}-means.pt"
-    vars_path = f"{vars_dir}/{model_name}-vars.pt"
+    means_path = f"{means_dir}/{model_name}@{args.model_ckpt_idx}-means.pt"
+    vars_path = f"{vars_dir}/{model_name}@{args.model_ckpt_idx}-vars.pt"
 
     N_seqs = len(data)
-    N_batches = int(math.ceil(N_seqs / coll_args.batch_size))
-    N_seen = 0
+    extract = lambda i: pt.tensor(data[i]["input_ids"], dtype=pt.int32)
+    N_batches = int(math.ceil(N_seqs / args.batch_size))
 
-    stats = Statistics(C, D, coll_args.device)
-    if coll_args.stage == "means":  # first pass
+    model, C, D = strip_model(model, args.device)
+    stats = Statistics(C, D, args.device)
+
+    N_seen = 0
+    if args.stage == "means":  # first pass
         N_seen = stats.load_totals(means_path)
-    elif coll_args.stage == "vars":  # second pass
+    elif args.stage == "vars":  # second pass
         stats.load_totals(means_path)
         N_seen = stats.load_var_sums(vars_path)
-
-    N_batches_seen = N_seen // coll_args.batch_size
+    N_batches_seen = int(math.ceil(N_seen / args.batch_size))
     if N_seen > 0:
         print(f"skipping {N_seen} sequences ({N_batches_seen} batches) already seen...")
+
     for b_idx in tqdm(range(N_batches_seen, N_batches), ncols=79):
-        start = b_idx * coll_args.batch_size
-        end = min(start + coll_args.batch_size, N_seqs)
+        start = b_idx * args.batch_size
+        end = min(start + args.batch_size, N_seqs)
         batch = [extract(i) for i in range(start, end)]
-        X, Y = process_batch(model, batch, coll_args.device)
-        if coll_args.stage == "means":  # first pass
+        X, Y = process_batch(model, batch, args.device)
+        if args.stage == "means":  # first pass
             stats.collect_means(X, Y, len(batch))
-        elif coll_args.stage == "vars":  # second pass
+        elif args.stage == "vars":  # second pass
             stats.collect_vars(X, Y, len(batch))
 
-        if (b_idx + 1) % (coll_args.save_every // coll_args.batch_size) != 0:
+        if (b_idx + 1) % (args.save_every // args.batch_size) != 0:
             continue  # don't save on most iterations
 
-        if coll_args.stage == "means":
-            stats.save_totals(means_path, coll_args.verbose)
-        elif coll_args.stage == "vars":
-            stats.save_var_sums(vars_path, coll_args.verbose)
+        if args.stage == "means":
+            stats.save_totals(means_path, args.verbose)
+        elif args.stage == "vars":
+            stats.save_var_sums(vars_path, args.verbose)
 
-        if coll_args.single:
+        if args.single:
             break
 
-    if coll_args.stage == "means":
-        stats.save_totals(means_path, coll_args.verbose)
-    elif coll_args.stage == "vars":
-        stats.save_var_sums(vars_path, coll_args.verbose)
+    if args.stage == "means":
+        stats.save_totals(means_path, args.verbose)
+    elif args.stage == "vars":
+        stats.save_var_sums(vars_path, args.verbose)

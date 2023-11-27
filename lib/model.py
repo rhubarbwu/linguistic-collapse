@@ -8,8 +8,11 @@ import torch as pt
 from torch import Tensor
 from torch.nn import Identity
 from transformers import (CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING,
-                          AutoConfig, AutoModelForCausalLM, AutoTokenizer)
+                          AutoConfig)
+from transformers import AutoModelForCausalLM as AutoCLM
+from transformers import AutoTokenizer
 
+from lib.utils import identify
 from lib.visualization import get_shade
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
@@ -201,18 +204,32 @@ def get_tokenizer(args: ModelArguments) -> AutoTokenizer:
     return tokenizer
 
 
+def select_ckpt(path: str, idx: int) -> str:
+    dir_files = os.listdir(path)
+    ckpt_files = [f for f in dir_files if f.startswith(f"checkpoint-")]
+    epoch_paths = sorted(ckpt_files, key=lambda s: int(s.split("-")[1]))
+    return f"{path}/{epoch_paths[idx]}"
+
+
 def get_model(
-    args: ModelArguments, config: AutoConfig, logger: Logger
-) -> AutoModelForCausalLM:
+    args: ModelArguments,
+    config: AutoConfig,
+    logger: Logger = None,
+    model_ckpt_idx: int = None,
+) -> AutoCLM:
     if args.model_name_or_path:
+        path = args.model_name_or_path
+        if model_ckpt_idx:
+            path = select_ckpt(path, model_ckpt_idx)
+
         torch_dtype = (
             args.torch_dtype
             if args.torch_dtype in ["auto", None]
             else getattr(pt, args.torch_dtype)
         )
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
+        model = AutoCLM.from_pretrained(
+            path,
+            from_tf=bool(".ckpt" in path),
             config=config,
             cache_dir=args.cache_dir,
             revision=args.model_revision,
@@ -222,41 +239,53 @@ def get_model(
             low_cpu_mem_usage=args.low_cpu_mem_usage,
         )
     else:
-        model = AutoModelForCausalLM.from_config(
-            config, trust_remote_code=args.trust_remote_code
-        )
+        model = AutoCLM.from_config(config, trust_remote_code=args.trust_remote_code)
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
-        logger.info(
-            f"Training new model from scratch - Total size={n_params/2**20:.2f}M params"
-        )
+        if logger:
+            logger.info(
+                f"Training new model from scratch - Total size={n_params/2**20:.2f}M params"
+            )
 
     return model
 
 
-def get_classifier_weights(args: Namespace) -> Tensor:
-    classifier_file = f"{args.model_cache}/{args.model_name}-cls.pt"
-    if not os.path.exists(classifier_file):
-        print(f"classifier weights file for {classifier_file} not found...")
-        return None
+def split_parts(model_iden_or_name: str) -> Tuple[int, int, int]:
+    iden = identify(model_iden_or_name)
+    depth_str, width_ckpt_str = iden.split("x")
+    width_str, ckpt_str = width_ckpt_str.split("@")
 
-    return pt.load(classifier_file, args.device)
+    return int(depth_str), int(width_str), int(ckpt_str)
 
 
-def strip_model(
-    args: ModelArguments, model: AutoModelForCausalLM, device: str = "cpu"
-) -> Tuple[AutoModelForCausalLM, int, int]:
+def strip_model(model: AutoCLM, device: str = "cpu") -> Tuple[AutoCLM, int, int]:
     C, D = model.lm_head.out_features, model.lm_head.in_features
-    W = list(model.lm_head.parameters())[0].detach()
     del model.lm_head
     model.lm_head = Identity()
+    model.to(device)
+    return model, C, D
 
-    classifier_file = f"{args.model_name_or_path}-cls.pt"
-    if not os.path.exists(classifier_file):
+
+def get_classifier_weights(args: Namespace) -> Tensor:
+    model_path = f"{args.model_cache}/{args.model_name}"
+    classifier_file = f"{args.model_cache}/cls-{args.model_name}.pt"
+    if os.path.exists(classifier_file):
+        return pt.load(classifier_file, args.device)
+
+    print(f"classifier weights file for {classifier_file} not found...")
+    if input("force load? ").upper().startswith("Y"):
+        _, _, ckpt_idx = split_parts(args.model_name)
+        ckpt_path = select_ckpt(model_path.split("@")[0], ckpt_idx)
+        model = AutoCLM.from_pretrained(
+            ckpt_path,
+            from_tf=bool(".ckpt" in ckpt_path),
+        )
+        W = list(model.lm_head.parameters())[0].detach()
+        del model
+
         print(
-            f"caching weights for {args.model_name_or_path} in {classifier_file}",
+            f"caching weights for {ckpt_path} in {classifier_file}",
             flush=True,
         )
         pt.save(W, classifier_file)
 
-    model.to(device)
-    return model, C, D
+        return W
