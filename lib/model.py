@@ -1,9 +1,11 @@
+import json
 import os
 from argparse import Namespace
 from dataclasses import dataclass, field
 from logging import Logger
 from typing import List, Optional, Tuple
 
+import numpy as np
 import torch as pt
 from torch import Tensor
 from torch.nn import Identity
@@ -13,35 +15,9 @@ from transformers import AutoModelForCausalLM as AutoCLM
 from transformers import AutoTokenizer
 
 from lib.utils import identify
-from lib.visualization import get_shade
 
 MODEL_CONFIG_CLASSES = list(MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
-
-COLOUR_BASES = [
-    "#1f77b4",
-    "#ff7f0e",
-    "#2ca02c",
-    "#d62728",
-    "#9467bd",
-    "#8c564b",
-    "#e377c2",
-]
-
-DEPTHS = [1, 2, 4, 8, 12]
-WIDTHS = [64, 128, 256, 512, 768, 1024]
-
-
-def get_model_colour(
-    depth: str, width: str, depths: List[int], widths: List[int], by_width: bool = False
-) -> str:
-    idx_d, idx_w = depths.index(int(depth)), widths.index(int(width))
-
-    base = COLOUR_BASES[idx_w if by_width else idx_d]
-    shade_idx = idx_d if by_width else idx_w
-    shade_count = len(depths if by_width else widths)
-    shade = get_shade(base, shade_idx, shade_count)
-    return shade
 
 
 @dataclass
@@ -204,11 +180,12 @@ def get_tokenizer(args: ModelArguments) -> AutoTokenizer:
     return tokenizer
 
 
-def select_ckpt(path: str, idx: int) -> str:
+def select_ckpt(path: str, idx: int) -> Optional[str]:
     dir_files = os.listdir(path)
     ckpt_files = [f for f in dir_files if f.startswith(f"checkpoint-")]
     epoch_paths = sorted(ckpt_files, key=lambda s: int(s.split("-")[1]))
-    return f"{path}/{epoch_paths[idx]}"
+    if idx < len(epoch_paths):
+        return f"{path}/{epoch_paths[idx]}"
 
 
 def get_model(
@@ -265,27 +242,46 @@ def strip_model(model: AutoCLM, device: str = "cpu") -> Tuple[AutoCLM, int, int]
     return model, C, D
 
 
-def get_classifier_weights(args: Namespace) -> Tensor:
-    model_path = f"{args.model_cache}/{args.model_name}"
-    classifier_file = f"{args.model_cache}/cls-{args.model_name}.pt"
+def get_model_loss(model_name: str, args: Namespace) -> Optional[np.float64]:
+    model_path = f"{args.model_cache}/{model_name}"
+    trainer_state_file = f"{model_path.split('@')[0]}/trainer_state.json"
+    if not os.path.exists(trainer_state_file):
+        return None
+
+    _, _, idx = split_parts(model_name)
+    with open(trainer_state_file, "r") as f:
+        log = json.load(f)["log_history"]
+
+    epoch_losses = [step["loss"] for step in log if idx <= step["epoch"] < idx + 1]
+    epoch_avg_loss = np.mean(epoch_losses).astype(np.float64)
+    return epoch_avg_loss
+
+
+def get_classifier_weights(model_name: str, args: Namespace) -> Optional[Tensor]:
+    model_path = f"{args.model_cache}/{model_name}"
+    classifier_file = f"{args.model_cache}/cls-{model_name}.pt"
     if os.path.exists(classifier_file):
         return pt.load(classifier_file, args.device)
 
     print(f"classifier weights file for {classifier_file} not found...")
-    if input("force load? ").upper().startswith("Y"):
-        _, _, ckpt_idx = split_parts(args.model_name)
+    if args.force_load or input("force load? ").upper().startswith("Y"):
+        _, _, ckpt_idx = split_parts(model_name)
         ckpt_path = select_ckpt(model_path.split("@")[0], ckpt_idx)
+        if ckpt_path is None:
+            print(f"W: model checkpoint at index {ckpt_idx} not found")
+            return None
+
         model = AutoCLM.from_pretrained(
             ckpt_path,
             from_tf=bool(".ckpt" in ckpt_path),
         )
-        W = list(model.lm_head.parameters())[0].detach()
+        W = list(model.lm_head.parameters())[0]
         del model
 
         print(
             f"caching weights for {ckpt_path} in {classifier_file}",
             flush=True,
         )
-        pt.save(W, classifier_file)
+        pt.save(W.detach(), classifier_file)
 
-        return W
+        return W.to(args.device)

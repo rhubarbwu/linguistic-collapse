@@ -148,15 +148,14 @@ class Statistics:
         if self.N1 != self.N2 or self.N1_seqs != self.N2_seqs:
             return None
 
-        means, _ = self.compute_means(idxs)
-
-        counts = (self.counts if idxs is None else self.counts[idxs]).unsqueeze(-1)
-        var_sums = (self.var_sums if idxs is None else self.var_sums[idxs]).unsqueeze(-1)
+        counts, var_sums = self.counts, self.var_sums
+        if idxs is not None:
+            counts, var_sums = counts[idxs], var_sums[idxs]
         C = len(counts)
         vars_normed = var_sums / counts
 
+        means, _ = self.compute_means(idxs)
         CDNVs = pt.zeros(C, C, dtype=self.dtype, device=self.device)
-
         for c in tqdm(range(C), desc="cdnvs"):
             var_avgs = (vars_normed[c] + vars_normed).squeeze() / 2
             means_diff = means[c] - means

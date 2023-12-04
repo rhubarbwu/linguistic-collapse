@@ -1,11 +1,14 @@
-from typing import Tuple
+from typing import Any, Optional, Tuple
 
 import torch as pt
 import torch.linalg as la
+from h5py import File
 from sklearn.cluster import KMeans, MiniBatchKMeans, SpectralClustering
 from sklearn.mixture import GaussianMixture
 from torch import Tensor
 from tqdm import tqdm
+
+from lib.utils import select_int_type
 
 
 def apply_pca(data: Tensor, K: int = 2) -> Tensor:
@@ -94,7 +97,7 @@ def collect_hist(
     min_val -= 0.01 * val_range
     max_val += 0.01 * val_range
 
-    hist = pt.zeros(num_bins, dtype=int, device=data.device)
+    hist = pt.zeros(num_bins, dtype=select_int_type(data.numel()), device=data.device)
     count = lambda x: pt.histc(x, num_bins, min_val, max_val).int()
     if triu:
         for i in tqdm(range((N - 1) // 2), ncols=79, desc=desc):
@@ -112,3 +115,28 @@ def collect_hist(
     edges = pt.linspace(min_val, max_val, num_bins + 1)
 
     return hist, edges
+
+
+ANALYSIS_FILE = "analysis.h5"
+
+
+def replace(file: File, metric: str, new_val: Any, entry: Optional[str] = None) -> File:
+    if new_val is not None and entry is not None:
+        if metric not in file:
+            file.create_group(metric)
+        if entry in file[metric]:
+            del file[metric][entry]
+        try:
+            file[metric][entry] = new_val.cpu()
+        except AttributeError:
+            file[metric][entry] = new_val
+    elif new_val is not None:
+        if metric in file:
+            del file[metric]
+        file.create_dataset(metric, data=new_val.cpu())
+
+    return file
+
+
+if __name__ == "__main__":
+    file = File(ANALYSIS_FILE, "a")

@@ -42,7 +42,7 @@ from transformers.utils.versions import require_version
 
 from lib.collection import CollectArguments, collect_embeddings, process_batch
 from lib.data import DataArguments
-from lib.model import ModelArguments, strip_model
+from lib.model import ModelArguments
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.35.0.dev0")
