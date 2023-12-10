@@ -3,7 +3,7 @@ import os
 from argparse import Namespace
 from dataclasses import dataclass, field
 from logging import Logger
-from typing import List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import torch as pt
@@ -156,7 +156,7 @@ def get_config(args: ModelArguments, logger: Logger) -> AutoConfig:
 
 
 def get_tokenizer(args: ModelArguments) -> AutoTokenizer:
-    tokenizer_kwargs = {
+    tknzer_args = {
         "cache_dir": args.cache_dir,
         "use_fast": args.use_fast_tokenizer,
         "revision": args.model_revision,
@@ -164,20 +164,16 @@ def get_tokenizer(args: ModelArguments) -> AutoTokenizer:
         "trust_remote_code": args.trust_remote_code,
     }
     if args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(
-            args.tokenizer_name, **tokenizer_kwargs
-        )
+        tknzer = AutoTokenizer.from_pretrained(args.tokenizer_name, **tknzer_args)
     elif args.model_name_or_path:
-        tokenizer = AutoTokenizer.from_pretrained(
-            args.model_name_or_path, **tokenizer_kwargs
-        )
+        tknzer = AutoTokenizer.from_pretrained(args.model_name_or_path, **tknzer_args)
     else:
         raise ValueError(
             "You are instantiating a new tokenizer from scratch. This is not supported by this script. "
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
 
-    return tokenizer
+    return tknzer
 
 
 def select_ckpt(path: str, idx: int) -> Optional[str]:
@@ -242,24 +238,41 @@ def strip_model(model: AutoCLM, device: str = "cpu") -> Tuple[AutoCLM, int, int]
     return model, C, D
 
 
-def get_model_loss(model_name: str, args: Namespace) -> Optional[np.float64]:
-    model_path = f"{args.model_cache}/{model_name}"
-    trainer_state_file = f"{model_path.split('@')[0]}/trainer_state.json"
-    if not os.path.exists(trainer_state_file):
-        return None
+def get_model_stats(model_name: str, args: Namespace) -> Dict[str, np.number]:
+    model_path, ckpt_idx = f"{args.model_cache}/{model_name}".split("@")
+    train_stats, trained_prop = {}, None
 
-    _, _, idx = split_parts(model_name)
-    with open(trainer_state_file, "r") as f:
-        log = json.load(f)["log_history"]
+    config_file = f"{model_path}/config.json"
+    if os.path.exists(config_file):
+        config = AutoConfig.from_pretrained(config_file)
+        model = AutoCLM.from_config(config)
+        n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
+        train_stats["n_params"] = n_params
 
-    epoch_losses = [step["loss"] for step in log if idx <= step["epoch"] < idx + 1]
-    epoch_avg_loss = np.mean(epoch_losses).astype(np.float64)
-    return epoch_avg_loss
+    results_file = f"{model_path}/train_results.json"
+    if os.path.exists(results_file):
+        with open(results_file, "r") as f:
+            data = json.load(f)
+        trained_prop = (int(ckpt_idx) + 1) / data["epoch"]
+        train_stats["train_time"] = np.float64(data["train_runtime"] * trained_prop)
+
+    state_file = f"{model_path}/trainer_state.json"
+    if os.path.exists(state_file):
+        _, _, idx = split_parts(model_name)
+        with open(state_file, "r") as f:
+            data = json.load(f)
+        log = data["log_history"]
+        epoch_losses = [step["loss"] for step in log if idx <= step["epoch"] < idx + 1]
+        train_stats["train_loss"] = np.mean(epoch_losses).astype(np.float64)
+        if trained_prop is not None:
+            train_stats["train_flops"] = np.int64(data["total_flos"] * trained_prop)
+
+    return train_stats
 
 
 def get_classifier_weights(model_name: str, args: Namespace) -> Optional[Tensor]:
     model_path = f"{args.model_cache}/{model_name}"
-    classifier_file = f"{args.model_cache}/cls-{model_name}.pt"
+    classifier_file = f"{model_path}/cls.pt"
     if os.path.exists(classifier_file):
         return pt.load(classifier_file, args.device)
 

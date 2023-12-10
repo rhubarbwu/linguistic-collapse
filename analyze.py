@@ -6,7 +6,7 @@ import torch as pt
 from h5py import File
 
 from lib.collapse import Statistics
-from lib.model import get_classifier_weights, get_model_loss, split_parts
+from lib.model import get_classifier_weights, get_model_stats, split_parts
 from lib.statistics import ANALYSIS_FILE, collect_hist, meanify_diag, replace
 from lib.utils import identify, inner_product
 from lib.visualization import TOO_BIG, visualize_matrix
@@ -34,7 +34,7 @@ parser.add_argument("-mc", "--model_cache", type=str, default=".")
 parser.add_argument("-f", "--force_load", action="store_true")
 
 parser.add_argument("-prog", "--progress", action="store_true")
-parser.add_argument("-loss", "--train_loss", action="store_true")
+parser.add_argument("-loss", "--model_stats", action="store_true")
 parser.add_argument("-eig", "--eigenvalues", action="store_true")
 parser.add_argument("-nor", "--norms", action="store_true")
 parser.add_argument("-coh", "--coherence", action="store_true")
@@ -42,6 +42,7 @@ parser.add_argument("-dual", "--duality", action="store_true")
 parser.add_argument("-snr", "--inv_snr", action="store_true")
 parser.add_argument("-all", "--analysis", action="store_true")
 parser.add_argument("-each", "--each_model", action="store_true")
+parser.add_argument("-hist", "--histograms", action="store_true")
 
 parser.add_argument("-mpc", "--min_per_class", type=int, default=1)
 parser.add_argument("-Mpc", "--max_per_class", type=int, default=None)
@@ -59,9 +60,9 @@ if "cuda" in args.device and not pt.cuda.is_available():
 
 if args.analysis:
     args.eigenvalues = args.norms = args.coherence = True
-    args.train_loss = args.duality = args.inv_snr = True
+    args.model_stats = args.duality = args.inv_snr = True
 args.analysis |= args.eigenvalues | args.norms | args.coherence
-args.analysis |= args.train_loss | args.duality | args.inv_snr
+args.analysis |= args.model_stats | args.duality | args.inv_snr
 
 
 PATHS = {}
@@ -147,10 +148,10 @@ for iden in IDENTIFIERS:
     if args.dims is None:
         args.dims = sample(list(range(len(indices))), 2)
 
-    if args.train_loss:
-        loss = get_model_loss(f"TS{iden}", args)
-        replace(file, "loss", loss, iden)
-        print(iden, loss)
+    if args.model_stats:
+        train_stats = get_model_stats(f"TS{iden}", args)
+        for stat_key in train_stats.keys():
+            replace(file, stat_key, train_stats[stat_key], iden)
 
     if args.eigenvalues:
         outer = inner_product(means.T, args.patch_size, "eigs outer")
@@ -166,21 +167,26 @@ for iden in IDENTIFIERS:
         replace(file, "norms_mean", norms.mean(), iden)
         replace(file, "norms_std", norms.std(), iden)
 
-        bins, edges = collect_hist(norms.unsqueeze(0), args.num_bins, desc="norms hist")
-        replace(file, "norms_bins", bins, iden)
-        replace(file, "norms_edges", edges, iden)
-        del norms, bins, edges
+        if args.histograms:
+            bins, edges = collect_hist(norms.unsqueeze(0), args.num_bins)
+            replace(file, "norms_bins", bins, iden)
+            replace(file, "norms_edges", edges, iden)
+            del bins, edges
+
+        del norms
 
     if args.coherence:
         inner = collected.coherence(indices, args.patch_size)
         replace(file, "coh_mean", inner.mean(), iden)
         replace(file, "coh_std", inner.std(), iden)
 
-        bins, edges = collect_hist(inner, args.num_bins, True, desc="coh hist")
-        replace(file, "coh_bins", bins, iden)
-        replace(file, "coh_edges", edges, iden)
+        if args.histograms:
+            bins, edges = collect_hist(inner, args.num_bins, True)
+            replace(file, "coh_bins", bins, iden)
+            replace(file, "coh_edges", edges, iden)
+            del bins, edges
 
-        del inner, bins, edges
+        del inner
 
     if args.duality:
         W = get_classifier_weights(f"TS{iden}", args)
@@ -193,26 +199,29 @@ for iden in IDENTIFIERS:
             replace(file, "dual_dot_std", dual_dot.std(), iden)
             del W, proj_m, proj_c
 
-            bins, edges = collect_hist(dual_dot, args.num_bins, desc="dual hist")
-            replace(file, "dual_bins", bins, iden)
-            replace(file, "dual_edges", edges, iden)
-            del dual_dot, bins, edges
+            if args.histograms:
+                bins, edges = collect_hist(dual_dot, args.num_bins)
+                replace(file, "dual_bins", bins, iden)
+                replace(file, "dual_edges", edges, iden)
+                del bins, edges
+
+            del dual_dot
 
     if args.inv_snr:
         CDNVs = collected.compute_vars(indices)
         if CDNVs is not None and collected.N2 == args.totals[0]:
             meanify_diag(CDNVs)
-            CDNVs = pt.log(CDNVs)
             replace(file, "cdnv_mean", CDNVs.mean(), iden)
             replace(file, "cdnv_std", CDNVs.std(), iden)
-            if args.each_model:
-                matpath = f"{args.output_dir}/cdnv-{iden}.{args.fig_format}"
-                visualize_matrix(CDNVs, matpath)
 
-            bins, edges = collect_hist(CDNVs, args.num_bins, True)
-            replace(file, "cdnv_bins", bins, iden)
-            replace(file, "cdnv_edges", edges, iden)
-            del CDNVs, bins, edges
+            if args.histograms:
+                pt.log_(CDNVs)
+                bins, edges = collect_hist(CDNVs, args.num_bins, True)
+                replace(file, "cdnv_bins", bins, iden)
+                replace(file, "cdnv_edges", edges, iden)
+                del bins, edges
+
+            del CDNVs
 
     del collected
 
