@@ -271,7 +271,7 @@ def get_model_stats(model_name: str, args: Namespace) -> Dict[str, np.number]:
 
 
 def get_classifier_weights(model_name: str, args: Namespace) -> Optional[Tensor]:
-    model_path = f"{args.model_cache}/{model_name}"
+    model_path = f"{args.model_cache}/{model_name}".split("@")[0]
     classifier_file = f"{model_path}/cls.pt"
     if os.path.exists(classifier_file):
         return pt.load(classifier_file, args.device)
@@ -279,7 +279,7 @@ def get_classifier_weights(model_name: str, args: Namespace) -> Optional[Tensor]
     print(f"classifier weights file for {classifier_file} not found...")
     if args.force_load or input("force load? ").upper().startswith("Y"):
         _, _, ckpt_idx = split_parts(model_name)
-        ckpt_path = select_ckpt(model_path.split("@")[0], ckpt_idx)
+        ckpt_path = select_ckpt(model_path, ckpt_idx)
         if ckpt_path is None:
             print(f"W: model checkpoint at index {ckpt_idx} not found")
             return None

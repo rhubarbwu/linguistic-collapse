@@ -3,13 +3,12 @@ from os.path import exists, isfile
 from random import sample
 
 import torch as pt
-from h5py import File
 
 from lib.collapse import Statistics
 from lib.model import get_classifier_weights, get_model_stats, split_parts
-from lib.statistics import ANALYSIS_FILE, collect_hist, meanify_diag, replace
+from lib.statistics import collect_hist, commit, meanify_diag
 from lib.utils import identify, inner_product
-from lib.visualization import TOO_BIG, visualize_matrix
+from lib.visualization import TOO_BIG
 
 pt.set_grad_enabled(False)
 
@@ -29,7 +28,7 @@ parser.add_argument(
 )
 
 parser.add_argument("-i", "--input_files", type=str, nargs="+", default=[])
-parser.add_argument("-o", "--output_file", type=str, default=ANALYSIS_FILE)
+parser.add_argument("-o", "--output_file", type=str, default="analysis.h5")
 parser.add_argument("-mc", "--model_cache", type=str, default=".")
 parser.add_argument("-f", "--force_load", action="store_true")
 
@@ -130,8 +129,6 @@ for iden in INCOMPLETE:
     del PATHS[iden]
     IDENTIFIERS.remove(iden)
 
-file = File(args.output_file, "a")
-
 
 for iden in IDENTIFIERS:
     if iden not in PATHS:
@@ -142,7 +139,7 @@ for iden in IDENTIFIERS:
     indices = collected.counts_in_range(args.min_per_class, args.max_per_class)
     counts = collected.counts[indices]
     if "counts" not in file or len(file["counts"]) != len(counts):
-        replace(file, "counts", counts)
+        commit(args.output_file, "counts", counts)
 
     means, mean_G = collected.compute_means(indices)
     if args.dims is None:
@@ -151,7 +148,7 @@ for iden in IDENTIFIERS:
     if args.model_stats:
         train_stats = get_model_stats(f"TS{iden}", args)
         for stat_key in train_stats.keys():
-            replace(file, stat_key, train_stats[stat_key], iden)
+            commit(args.output_file, stat_key, train_stats[stat_key], iden)
 
     if args.eigenvalues:
         outer = inner_product(means.T, args.patch_size, "eigs outer")
@@ -159,31 +156,31 @@ for iden in IDENTIFIERS:
             print(f"W: {outer.shape[0]} > {TOO_BIG}, eigenvalues disabled")
         else:
             eig_vals = pt.linalg.eigvalsh(outer)
-            replace(file, "eig_vals", eig_vals.real, iden)
+            commit(args.output_file, "eig_vals", eig_vals.real, iden)
 
     if args.norms:
         norms = means.norm(dim=-1) ** 2
-        replace(file, "norms", norms, iden)
-        replace(file, "norms_mean", norms.mean(), iden)
-        replace(file, "norms_std", norms.std(), iden)
+        commit(args.output_file, "norms", norms, iden)
+        commit(args.output_file, "norms_mean", norms.mean(), iden)
+        commit(args.output_file, "norms_std", norms.std(), iden)
 
         if args.histograms:
             bins, edges = collect_hist(norms.unsqueeze(0), args.num_bins)
-            replace(file, "norms_bins", bins, iden)
-            replace(file, "norms_edges", edges, iden)
+            commit(args.output_file, "norms_bins", bins, iden)
+            commit(args.output_file, "norms_edges", edges, iden)
             del bins, edges
 
         del norms
 
     if args.coherence:
         inner = collected.coherence(indices, args.patch_size)
-        replace(file, "coh_mean", inner.mean(), iden)
-        replace(file, "coh_std", inner.std(), iden)
+        commit(args.output_file, "coh_mean", inner.mean(), iden)
+        commit(args.output_file, "coh_std", inner.std(), iden)
 
         if args.histograms:
             bins, edges = collect_hist(inner, args.num_bins, True)
-            replace(file, "coh_bins", bins, iden)
-            replace(file, "coh_edges", edges, iden)
+            commit(args.output_file, "coh_bins", bins, iden)
+            commit(args.output_file, "coh_edges", edges, iden)
             del bins, edges
 
         del inner
@@ -192,17 +189,18 @@ for iden in IDENTIFIERS:
         W = get_classifier_weights(f"TS{iden}", args)
         if W is not None:
             dual_diff = collected.diff_duality(W, indices)
-            replace(file, "dual_diff", dual_diff, iden)
+            commit(args.output_file, "dual_diff", dual_diff, iden)
+            del dual_diff
 
             dual_dot, proj_m, proj_c = collected.dot_duality(W, indices, args.dims)
-            replace(file, "dual_dot_mean", dual_dot.mean(), iden)
-            replace(file, "dual_dot_std", dual_dot.std(), iden)
+            commit(args.output_file, "dual_dot_mean", dual_dot.mean(), iden)
+            commit(args.output_file, "dual_dot_std", dual_dot.std(), iden)
             del W, proj_m, proj_c
 
             if args.histograms:
                 bins, edges = collect_hist(dual_dot, args.num_bins)
-                replace(file, "dual_bins", bins, iden)
-                replace(file, "dual_edges", edges, iden)
+                commit(args.output_file, "dual_bins", bins, iden)
+                commit(args.output_file, "dual_edges", edges, iden)
                 del bins, edges
 
             del dual_dot
@@ -211,14 +209,14 @@ for iden in IDENTIFIERS:
         CDNVs = collected.compute_vars(indices)
         if CDNVs is not None and collected.N2 == args.totals[0]:
             meanify_diag(CDNVs)
-            replace(file, "cdnv_mean", CDNVs.mean(), iden)
-            replace(file, "cdnv_std", CDNVs.std(), iden)
+            commit(args.output_file, "cdnv_mean", CDNVs.mean(), iden)
+            commit(args.output_file, "cdnv_std", CDNVs.std(), iden)
 
             if args.histograms:
                 pt.log_(CDNVs)
                 bins, edges = collect_hist(CDNVs, args.num_bins, True)
-                replace(file, "cdnv_bins", bins, iden)
-                replace(file, "cdnv_edges", edges, iden)
+                commit(args.output_file, "cdnv_bins", bins, iden)
+                commit(args.output_file, "cdnv_edges", edges, iden)
                 del bins, edges
 
             del CDNVs
@@ -226,5 +224,4 @@ for iden in IDENTIFIERS:
     del collected
 
 
-file.close()
 print(LINE_SEP)

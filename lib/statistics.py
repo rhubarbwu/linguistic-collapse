@@ -117,10 +117,8 @@ def collect_hist(
     return hist, edges
 
 
-ANALYSIS_FILE = "analysis.h5"
-
-
-def replace(file: File, metric: str, new_val: Any, entry: Optional[str] = None) -> File:
+def commit(path: str, metric: str, new_val: Any, entry: Optional[str] = None):
+    file = File(path, "a")
     if new_val is not None and entry is not None:
         if metric not in file:
             file.create_group(metric)
@@ -134,9 +132,4 @@ def replace(file: File, metric: str, new_val: Any, entry: Optional[str] = None) 
         if metric in file:
             del file[metric]
         file.create_dataset(metric, data=new_val.cpu())
-
-    return file
-
-
-if __name__ == "__main__":
-    file = File(ANALYSIS_FILE, "a")
+    file.close()
