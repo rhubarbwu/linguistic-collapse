@@ -77,12 +77,49 @@ def compute_centroids(
     return labels, centroids
 
 
-def meanify_diag(data: Tensor) -> Tensor:
-    assert pt.all(pt.tensor(data.shape) == data.shape[0])
-    data.fill_diagonal_(0)
-    mean = data.sum() / (data.shape[0] * (data.shape[0] - 1))
-    data.fill_diagonal_(mean)
-    return data
+def triu_mean(data: Tensor, desc: str = "means") -> pt.float:
+    N = data.shape[0]
+    total = 0
+
+    assert N == data.shape[1]
+    for i in tqdm(range((N - 1) // 2), ncols=79, desc=desc):
+        upper = data[i][i + 1 :]
+        lower = data[N - i - 2][N - i - 1 :]
+        folded = pt.cat((upper, lower))
+        total += folded.sum()
+    if N % 2 == 0:
+        row = data[N // 2 - 1][N // 2 :]
+        total += row.sum()
+
+    mean = total / (N * (N - 1) / 2)
+    return mean
+
+
+def triu_std(
+    data: Tensor,
+    mean: pt.float = None,
+    correction: bool = True,
+    desc: str = "std",
+) -> pt.float:
+    debias = 1 if correction else 0
+    if mean is None:
+        mean = triu_mean(data)
+
+    N = data.shape[0]
+    total = 0
+
+    assert N == data.shape[1]
+    for i in tqdm(range((N - 1) // 2), ncols=79, desc=desc):
+        upper = data[i][i + 1 :]
+        lower = data[N - i - 2][N - i - 1 :]
+        folded = pt.cat((upper, lower))
+        total += ((folded - mean) ** 2).sum()
+    if N % 2 == 0:
+        row = data[N // 2 - 1][N // 2 :]
+        total += ((row - mean) ** 2).sum()
+
+    var = total / (N * (N - 1) / 2 - debias)
+    return var.sqrt()
 
 
 def collect_hist(

@@ -7,7 +7,7 @@ import torch.linalg as la
 from torch import Tensor
 from tqdm import tqdm
 
-from lib.statistics import collect_hist, meanify_diag
+from lib.statistics import collect_hist, triu_mean, triu_std
 from lib.utils import inner_product, normalize, select_int_type
 from lib.visualization import plot_histogram
 
@@ -156,7 +156,7 @@ class Statistics:
 
         means, _ = self.compute_means(idxs)
         CDNVs = pt.zeros(C, C, dtype=self.dtype, device=self.device)
-        for c in tqdm(range(C), desc="cdnvs"):
+        for c in tqdm(range(C), ncols=79, desc="cdnvs"):
             var_avgs = (vars_normed[c] + vars_normed).squeeze() / 2
             means_diff = means[c] - means
             inner = pt.sum(means_diff * means_diff, dim=-1)
@@ -183,25 +183,25 @@ class Statistics:
         idxs: classes to select for subsampled computation.
         """
         means, mean_G = self.compute_means(idxs)
-        diff = means - mean_G
+        diff_normed = normalize(means - mean_G)  # C x D
 
         weights = weights if idxs is None else weights[idxs]
-        weights_normed = normalize(weights).to(self.device)
+        weights_normed = normalize(weights).to(self.device)  # C x D
 
-        duality = la.norm(normalize(diff) - weights_normed) ** 2 / self.C
+        duality = la.norm(diff_normed - weights_normed) ** 2 / self.C
         return duality.cpu()
 
     def dot_duality(
         self, weights: Tensor, idxs: List[int] = None, dims: Tuple[int] = (0, 1)
     ) -> Tensor:
         means, mean_G = self.compute_means(idxs)
-        diff_normed = normalize(means - mean_G)
+        diff_normed = normalize(means - mean_G)  # C x D
 
         weights = weights if idxs is None else weights[idxs]
-        weights_normed = normalize(weights).to(self.device)
+        weights_normed = normalize(weights).to(self.device)  # C x D
 
-        dot_prod = diff_normed * weights_normed
-        result = pt.sum(dot_prod, dim=1)
+        dot_prod = diff_normed * weights_normed  # C x D
+        result = pt.sum(dot_prod, dim=1)  # C
 
         selected = (weights_normed[dims, :] + diff_normed[dims, :]) / 2
         proj_means = selected @ diff_normed.mT
@@ -334,9 +334,9 @@ if __name__ == "__main__":
     duality = stats.diff_duality(W)
     print("self-duality:", duality)
 
-    inner = meanify_diag(stats.coherence())
-    hist, edges = collect_hist(inner, triu=True, desc="coh hist")
-    print("coherence:", inner.std().cpu() / inner.mean().cpu())
+    coh = stats.coherence()
+    hist, edges = collect_hist(coh, triu=True, desc="coh hist")
+    print("coherence:", triu_std(coh).cpu() / triu_mean(coh).cpu())
 
     ## Variances ##
 
@@ -349,7 +349,7 @@ if __name__ == "__main__":
     stats.collect_vars(X[-B:], Y[-B:], B)
 
     # class-distance normalized variances (CDNVS)
-    CDNVs = meanify_diag(stats.compute_vars())
+    CDNVs = stats.compute_vars()
 
     plt.matshow(CDNVs.cpu())
     plt.colorbar()
@@ -361,6 +361,7 @@ if __name__ == "__main__":
     plot_histogram(ax, hist, edges, "dummy", "#000000")
     fig.savefig(hist_path)
 
-    CDNVs = meanify_diag(CDNVs)
-    inv_snr = CDNVs.std().cpu() / CDNVs.mean().cpu()
+    mean = triu_mean(CDNVs)
+    std = triu_std(CDNVs, mean)
+    inv_snr = std.cpu() / mean.cpu()
     print("inverse SNR:", inv_snr)

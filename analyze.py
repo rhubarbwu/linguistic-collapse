@@ -6,7 +6,7 @@ import torch as pt
 
 from lib.collapse import Statistics
 from lib.model import get_classifier_weights, get_model_stats, split_parts
-from lib.statistics import collect_hist, commit, meanify_diag
+from lib.statistics import collect_hist, commit, triu_mean, triu_std
 from lib.utils import identify, inner_product
 from lib.visualization import TOO_BIG
 
@@ -31,6 +31,7 @@ parser.add_argument("-i", "--input_files", type=str, nargs="+", default=[])
 parser.add_argument("-o", "--output_file", type=str, default="analysis.h5")
 parser.add_argument("-mc", "--model_cache", type=str, default=".")
 parser.add_argument("-f", "--force_load", action="store_true")
+parser.add_argument("-1", "--single", action="store_true")
 
 parser.add_argument("-prog", "--progress", action="store_true")
 parser.add_argument("-loss", "--model_stats", action="store_true")
@@ -38,7 +39,7 @@ parser.add_argument("-eig", "--eigenvalues", action="store_true")
 parser.add_argument("-nor", "--norms", action="store_true")
 parser.add_argument("-coh", "--coherence", action="store_true")
 parser.add_argument("-dual", "--duality", action="store_true")
-parser.add_argument("-snr", "--inv_snr", action="store_true")
+parser.add_argument("-snr", "-cdnv", "--inv_snr", action="store_true")
 parser.add_argument("-all", "--analysis", action="store_true")
 parser.add_argument("-each", "--each_model", action="store_true")
 parser.add_argument("-hist", "--histograms", action="store_true")
@@ -106,7 +107,7 @@ for iden in PATHS:
     del collected
 
 
-IDENTIFIERS = sorted(PATHS.keys(), key=lambda x: split_parts(x)[2])
+IDENTIFIERS = sorted(PATHS.keys(), key=lambda x: split_parts(x)[1])  # sort by dim
 LONGEST_IDEN = max(5, max([len(iden) for iden in IDENTIFIERS]))
 
 if args.progress:
@@ -129,6 +130,8 @@ for iden in INCOMPLETE:
     del PATHS[iden]
     IDENTIFIERS.remove(iden)
 
+if args.single:  # run the first one for debugging purposes
+    IDENTIFIERS = IDENTIFIERS[0:1]
 
 for iden in IDENTIFIERS:
     if iden not in PATHS:
@@ -208,9 +211,11 @@ for iden in IDENTIFIERS:
     if args.inv_snr:
         CDNVs = collected.compute_vars(indices)
         if CDNVs is not None and collected.N2 == args.totals[0]:
-            meanify_diag(CDNVs)
-            commit(args.output_file, "cdnv_mean", CDNVs.mean(), iden)
-            commit(args.output_file, "cdnv_std", CDNVs.std(), iden)
+
+            mean = triu_mean(CDNVs)
+            std = triu_std(CDNVs, mean)
+            commit(args.output_file, "cdnv_mean", mean, iden)
+            commit(args.output_file, "cdnv_std", std, iden)
 
             if args.histograms:
                 pt.log_(CDNVs)
