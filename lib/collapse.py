@@ -8,7 +8,7 @@ from torch import Tensor
 from tqdm import tqdm
 
 from lib.statistics import collect_hist, triu_mean, triu_std
-from lib.utils import inner_product, normalize, select_int_type
+from lib.utils import inner_product, log_kernel, normalize, select_int_type
 from lib.visualization import plot_histogram
 
 means_path = lambda name: f"means/{name}-means.pt"
@@ -127,8 +127,14 @@ class Statistics:
 
         return self.var_sums
 
-    def compute_means(self, idxs: List[int] = None) -> Tuple[Tensor, Tensor]:
-        """Compute and store the overall means of the dataset."""
+    def compute_means(
+        self, idxs: List[int] = None, weighted: bool = False
+    ) -> Tuple[Tensor, Tensor]:
+        """Compute and store the overall means of the dataset.
+        idxs: classes to select for subsampled computation.
+        weighted: whether to use the global mean (True) as opposed to the
+            unweighted average mean (False).
+        """
 
         counts = (self.counts if idxs is None else self.counts[idxs]).unsqueeze(-1)
         N = counts.sum()
@@ -136,14 +142,20 @@ class Statistics:
             assert N == self.N1
 
         totals = self.totals if idxs is None else self.totals[idxs]
-        self.means = totals / (counts + self.eps).to(self.dtype)  # C' x D
-        self.mean_G = counts.T.to(self.dtype) @ self.means / (N + self.eps)  # D
-        self.hash = sha256(self.means.cpu().numpy().tobytes()).hexdigest()
+        mean = totals / (counts + self.eps).to(self.dtype)  # C' x D
+        if weighted:
+            mean_G = counts.T.to(self.dtype) @ mean / (N + self.eps)  # D
+        else:
+            mean_G = mean.mean(dim=0)
 
-        return self.means, self.mean_G
+        self.hash = sha256(mean.cpu().numpy().tobytes()).hexdigest()
+
+        return mean, mean_G
 
     def compute_vars(self, idxs: List[int] = None) -> Tensor:
-        """Compute the overall covariances of the dataset."""
+        """Compute the overall covariances of the dataset.
+        idxs: classes to select for subsampled computation.
+        """
 
         if self.N1 != self.N2 or self.N1_seqs != self.N2_seqs:
             return None
@@ -166,16 +178,42 @@ class Statistics:
 
     ## COLLAPSE MEASURES ##
 
-    def coherence(self, idxs: List[int] = None, patch_size: int = None) -> Tensor:
-        """Compute coherence between class means.
+    def mean_norms(self, idxs: List[int] = None) -> Tensor:
+        """Compute norms of class means for measure equinormness of NC2/GCN2.
         idxs: classes to select for subsampled computation.
-        patch_size: if given, the maximum patch size for memory-constrained environments.
+        """
+        means, _ = self.compute_means(idxs)
+        norms = means.norm(dim=-1) ** 2  # C'
+
+        return norms
+
+    def interference(self, idxs: List[int] = None, patch_size: int = None) -> Tensor:
+        """Compute interference between class means to measure convergence to
+        a simplex ETF (NC2), which is equivalent to the identity matrix.
+        idxs: classes to select for subsampled computation.
+        patch_size: the max patch size for memory-constrained environments.
         """
 
         means, mean_G = self.compute_means(idxs)
-        diff = means - mean_G
+        mean_diffs = means - mean_G  # C' x D
 
-        return inner_product(normalize(diff), patch_size, "coh inner")
+        interference = inner_product(normalize(mean_diffs), patch_size, "interfere")
+
+        return interference  # C' x C'
+
+    def geodesic_surplus(
+        self, idxs: List[int] = None, kernel: callable = log_kernel
+    ) -> Tensor:
+        """Compute geodesic surpluses towards to measure convergence to
+        hyperspherical uniformity (GNC2, https://arxiv.org/abs/2303.06484).
+        idxs: classes to select for subsampled computation.
+        kernel: how to compute geodesic distance between points.
+        """
+        means, _ = self.compute_means(idxs)
+        dists = kernel(means)  # C' x C'
+        surplus = dists - dists.min()
+
+        return surplus  # C' x C'
 
     def diff_duality(self, weights: Tensor, idxs: List[int] = None) -> pt.float:
         """Compute self-duality (NC3).
@@ -192,8 +230,17 @@ class Statistics:
         return duality.cpu()
 
     def dot_duality(
-        self, weights: Tensor, idxs: List[int] = None, dims: Tuple[int] = (0, 1)
+        self,
+        weights: Tensor,
+        idxs: List[int] = None,
+        dims: Tuple[int] = None,
     ) -> Tensor:
+        """Compute dot-product similarities between means and classifier.
+        The average of this matrix is linearly related to self-duality (NC3).
+        weights (C x D): weights of the linear classifier
+        idxs: classes to select for subsampled computation.
+        dims: dimensions on which to project the weights and mean norms
+        """
         means, mean_G = self.compute_means(idxs)
         diff_normed = normalize(means - mean_G)  # C x D
 
@@ -203,11 +250,29 @@ class Statistics:
         dot_prod = diff_normed * weights_normed  # C x D
         result = pt.sum(dot_prod, dim=1)  # C
 
+        if dims is not None:
+            selected = (weights_normed[dims, :] + diff_normed[dims, :]) / 2
+            proj_means = selected @ diff_normed.mT
+            proj_cls = selected @ weights_normed.mT
+
+        return result, proj_means, proj_cls
+
+    def project_classes(
+        self,
+        weights: Tensor,
+        idxs: List[int] = None,
+        dims: Tuple[int] = None,
+    ):
+        means, mean_G = self.compute_means(idxs)
+        diff_normed = normalize(means - mean_G)  # C x D
+
+        weights = weights if idxs is None else weights[idxs]
+        weights_normed = normalize(weights).to(self.device)  # C x D
+
         selected = (weights_normed[dims, :] + diff_normed[dims, :]) / 2
         proj_means = selected @ diff_normed.mT
         proj_cls = selected @ weights_normed.mT
-
-        return result, proj_means, proj_cls
+        return proj_means, proj_cls
 
     ## SAVING AND LOADING ##
 

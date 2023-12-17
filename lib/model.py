@@ -9,8 +9,7 @@ import numpy as np
 import torch as pt
 from torch import Tensor
 from torch.nn import Identity
-from transformers import (CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING,
-                          AutoConfig)
+from transformers import CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING, AutoConfig
 from transformers import AutoModelForCausalLM as AutoCLM
 from transformers import AutoTokenizer
 
@@ -276,25 +275,23 @@ def get_classifier_weights(model_name: str, args: Namespace) -> Optional[Tensor]
     if os.path.exists(classifier_file):
         return pt.load(classifier_file, args.device)
 
-    print(f"classifier weights file for {classifier_file} not found...")
-    if args.force_load or input("force load? ").upper().startswith("Y"):
-        _, _, ckpt_idx = split_parts(model_name)
-        ckpt_path = select_ckpt(model_path, ckpt_idx)
-        if ckpt_path is None:
-            print(f"W: model checkpoint at index {ckpt_idx} not found")
-            return None
+    _, _, ckpt_idx = split_parts(model_name)
+    ckpt_path = select_ckpt(model_path, ckpt_idx)
+    if ckpt_path is None:
+        print(f"W: model checkpoint at index {ckpt_idx} not found")
+        return None
 
-        model = AutoCLM.from_pretrained(
-            ckpt_path,
-            from_tf=bool(".ckpt" in ckpt_path),
-        )
-        W = list(model.lm_head.parameters())[0]
-        del model
+    model = AutoCLM.from_pretrained(
+        ckpt_path,
+        from_tf=bool(".ckpt" in ckpt_path),
+    )
+    W = list(model.lm_head.parameters())[0]
+    del model
 
-        print(
-            f"caching weights for {ckpt_path} in {classifier_file}",
-            flush=True,
-        )
-        pt.save(W.detach(), classifier_file)
+    print(
+        f"caching weights for {ckpt_path} in {classifier_file}",
+        flush=True,
+    )
+    pt.save(W.detach(), classifier_file)
 
-        return W.to(args.device)
+    return W.to(args.device)

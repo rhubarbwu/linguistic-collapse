@@ -1,4 +1,5 @@
 import gc
+from math import copysign
 from os.path import isfile
 from typing import Any, List, Set, Tuple
 
@@ -103,6 +104,28 @@ def extract_parts(string: str, delims: Set[str]):
         parts[delim] = string[idx + len(delim) : next_idx]
 
     return parts
+
+
+def log_kernel(matrix: Tensor, device: str = "cpu"):
+    N = len(matrix)
+    normed = normalize(matrix)
+    kernel_grid = pt.zeros((N, N), device=device)
+    for idx in tqdm(range(N), ncols=79, desc="log kernel"):
+        diff_norms = (normed[idx] - normed).norm(dim=-1) # normalize first
+        kernel_grid[idx] = (diff_norms ** (-1)).log()
+
+    return kernel_grid
+
+
+def riesz_kernel(matrix: Tensor, device: str = "cpu"):
+    N, S = len(matrix), matrix.shape[-1] - 2
+    normed = normalize(matrix)
+    kernel_grid = pt.zeros((N, N), device=device)
+    for idx in tqdm(range(N), ncols=79, desc="riesz kernel"):
+        diff_norms = (normed[idx] - normed).norm(dim=-1)
+        kernel_grid[idx] = copysign(1, S) * diff_norms ** (-S)
+
+    return kernel_grid
 
 
 def inner_product(

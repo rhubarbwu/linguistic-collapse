@@ -51,9 +51,7 @@ def cluster_spectral(data, K):
 
 
 def compute_centroids(
-    data: Tensor,
-    K: int = 1,
-    weights: Tensor = None,
+    data: Tensor, K: int = 1, weights: Tensor = None
 ) -> Tuple[Tensor, Tensor]:
     assert data.shape[0] == weights.shape[0]
 
@@ -96,10 +94,7 @@ def triu_mean(data: Tensor, desc: str = "means") -> pt.float:
 
 
 def triu_std(
-    data: Tensor,
-    mean: pt.float = None,
-    correction: bool = True,
-    desc: str = "std",
+    data: Tensor, mean: pt.float = None, correction: bool = True, desc: str = "std"
 ) -> pt.float:
     debias = 1 if correction else 0
     if mean is None:
@@ -123,10 +118,7 @@ def triu_std(
 
 
 def collect_hist(
-    data: Tensor,
-    num_bins: int = 64,
-    triu: bool = False,
-    desc: str = "histogram",
+    data: Tensor, num_bins: int = 64, triu: bool = False, desc: str = "histogram"
 ) -> Tuple[Tensor, Tensor]:
     N = data.shape[0]
     min_val, max_val = data.min(), data.max()

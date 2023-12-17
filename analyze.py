@@ -1,14 +1,12 @@
 from argparse import ArgumentParser
 from os.path import exists, isfile
-from random import sample
 
 import torch as pt
 
 from lib.collapse import Statistics
 from lib.model import get_classifier_weights, get_model_stats, split_parts
 from lib.statistics import collect_hist, commit, triu_mean, triu_std
-from lib.utils import identify, inner_product
-from lib.visualization import TOO_BIG
+from lib.utils import identify, log_kernel, riesz_kernel
 
 pt.set_grad_enabled(False)
 
@@ -30,14 +28,14 @@ parser.add_argument(
 parser.add_argument("-i", "--input_files", type=str, nargs="+", default=[])
 parser.add_argument("-o", "--output_file", type=str, default="analysis.h5")
 parser.add_argument("-mc", "--model_cache", type=str, default=".")
-parser.add_argument("-f", "--force_load", action="store_true")
+parser.add_argument("-f", "--force", action="store_true")
 parser.add_argument("-1", "--single", action="store_true")
 
 parser.add_argument("-prog", "--progress", action="store_true")
 parser.add_argument("-loss", "--model_stats", action="store_true")
-parser.add_argument("-eig", "--eigenvalues", action="store_true")
 parser.add_argument("-nor", "--norms", action="store_true")
-parser.add_argument("-coh", "--coherence", action="store_true")
+parser.add_argument("-etf", "--interfere", action="store_true")
+parser.add_argument("-geo", "--geodesic", "--hypersphere", type=str, default=None)
 parser.add_argument("-dual", "--duality", action="store_true")
 parser.add_argument("-snr", "-cdnv", "--inv_snr", action="store_true")
 parser.add_argument("-all", "--analysis", action="store_true")
@@ -59,9 +57,9 @@ if "cuda" in args.device and not pt.cuda.is_available():
 
 
 if args.analysis:
-    args.eigenvalues = args.norms = args.coherence = True
+    args.norms = args.coherence = args.geodesic = True
     args.model_stats = args.duality = args.inv_snr = True
-args.analysis |= args.eigenvalues | args.norms | args.coherence
+args.analysis |= args.norms | args.interfere | (args.geodesic is not None)
 args.analysis |= args.model_stats | args.duality | args.inv_snr
 
 
@@ -133,6 +131,21 @@ for iden in INCOMPLETE:
 if args.single:  # run the first one for debugging purposes
     IDENTIFIERS = IDENTIFIERS[0:1]
 
+
+def triu_stats_histogram(data: pt.Tensor, key: str):
+    mean = triu_mean(data)
+    std = triu_std(data, mean)
+
+    commit(args.output_file, f"{key}_mean", mean, iden)
+    commit(args.output_file, f"{key}_std", std, iden)
+
+    if args.histograms:
+        bins, edges = collect_hist(data, args.num_bins, True)
+        commit(args.output_file, f"{key}_bins", bins, iden)
+        commit(args.output_file, f"{key}_edges", edges, iden)
+        del bins, edges
+
+
 for iden in IDENTIFIERS:
     if iden not in PATHS:
         continue
@@ -144,25 +157,13 @@ for iden in IDENTIFIERS:
     if "counts" not in file or len(file["counts"]) != len(counts):
         commit(args.output_file, "counts", counts)
 
-    means, mean_G = collected.compute_means(indices)
-    if args.dims is None:
-        args.dims = sample(list(range(len(indices))), 2)
-
     if args.model_stats:
         train_stats = get_model_stats(f"TS{iden}", args)
         for stat_key in train_stats.keys():
             commit(args.output_file, stat_key, train_stats[stat_key], iden)
 
-    if args.eigenvalues:
-        outer = inner_product(means.T, args.patch_size, "eigs outer")
-        if outer.shape[0] > TOO_BIG:
-            print(f"W: {outer.shape[0]} > {TOO_BIG}, eigenvalues disabled")
-        else:
-            eig_vals = pt.linalg.eigvalsh(outer)
-            commit(args.output_file, "eig_vals", eig_vals.real, iden)
-
     if args.norms:
-        norms = means.norm(dim=-1) ** 2
+        norms = collected.mean_norms(indices)
         commit(args.output_file, "norms", norms, iden)
         commit(args.output_file, "norms_mean", norms.mean(), iden)
         commit(args.output_file, "norms_std", norms.std(), iden)
@@ -175,18 +176,16 @@ for iden in IDENTIFIERS:
 
         del norms
 
-    if args.coherence:
-        inner = collected.coherence(indices, args.patch_size)
-        commit(args.output_file, "coh_mean", inner.mean(), iden)
-        commit(args.output_file, "coh_std", inner.std(), iden)
+    if args.interfere:
+        interfere = collected.interference(indices, args.patch_size)
+        triu_stats_histogram(interfere, "interfere")
+        del interfere
 
-        if args.histograms:
-            bins, edges = collect_hist(inner, args.num_bins, True)
-            commit(args.output_file, "coh_bins", bins, iden)
-            commit(args.output_file, "coh_edges", edges, iden)
-            del bins, edges
-
-        del inner
+    if args.geodesic:
+        kernel = riesz_kernel if "riesz" in args.geodesic else log_kernel
+        surplus = collected.geodesic_surplus(indices, kernel)
+        triu_stats_histogram(surplus, f"geodesic_{args.geodesic}")
+        del surplus
 
     if args.duality:
         W = get_classifier_weights(f"TS{iden}", args)
@@ -211,7 +210,6 @@ for iden in IDENTIFIERS:
     if args.inv_snr:
         CDNVs = collected.compute_vars(indices)
         if CDNVs is not None and collected.N2 == args.totals[0]:
-
             mean = triu_mean(CDNVs)
             std = triu_std(CDNVs, mean)
             commit(args.output_file, "cdnv_mean", mean, iden)
