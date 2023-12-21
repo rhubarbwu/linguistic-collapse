@@ -8,7 +8,8 @@ from torch import Tensor
 from tqdm import tqdm
 
 from lib.statistics import collect_hist, triu_mean, triu_std
-from lib.utils import inner_product, log_kernel, normalize, select_int_type
+from lib.utils import (frobenize, inner_product, log_kernel, normalize,
+                       select_int_type)
 from lib.visualization import plot_histogram
 
 means_path = lambda name: f"means/{name}-means.pt"
@@ -221,19 +222,19 @@ class Statistics:
         idxs: classes to select for subsampled computation.
         """
         means, mean_G = self.compute_means(idxs)
-        diff_normed = normalize(means - mean_G)  # C x D
-
+        means_frobed = frobenize(means - mean_G).to(self.device) # C x D
+    
         weights = weights if idxs is None else weights[idxs]
-        weights_normed = normalize(weights).to(self.device)  # C x D
+        weights_frobed = frobenize(weights).to(self.device) # C x D
 
-        duality = la.norm(diff_normed - weights_normed) ** 2 / self.C
+        duality = la.norm(weights_frobed - means_frobed) # 1
+        
         return duality.cpu()
 
     def dot_duality(
         self,
         weights: Tensor,
         idxs: List[int] = None,
-        dims: Tuple[int] = None,
     ) -> Tensor:
         """Compute dot-product similarities between means and classifier.
         The average of this matrix is linearly related to self-duality (NC3).
@@ -242,20 +243,15 @@ class Statistics:
         dims: dimensions on which to project the weights and mean norms
         """
         means, mean_G = self.compute_means(idxs)
-        diff_normed = normalize(means - mean_G)  # C x D
-
+        means_frobed = frobenize(means - mean_G).to(self.device) # C x D
+    
         weights = weights if idxs is None else weights[idxs]
-        weights_normed = normalize(weights).to(self.device)  # C x D
+        weights_frobed = frobenize(weights).to(self.device) # C x D
 
-        dot_prod = diff_normed * weights_normed  # C x D
+        dot_prod = means_frobed * weights_frobed  # C x D
         result = pt.sum(dot_prod, dim=1)  # C
 
-        if dims is not None:
-            selected = (weights_normed[dims, :] + diff_normed[dims, :]) / 2
-            proj_means = selected @ diff_normed.mT
-            proj_cls = selected @ weights_normed.mT
-
-        return result, proj_means, proj_cls
+        return result
 
     def project_classes(
         self,
@@ -264,14 +260,14 @@ class Statistics:
         dims: Tuple[int] = None,
     ):
         means, mean_G = self.compute_means(idxs)
-        diff_normed = normalize(means - mean_G)  # C x D
-
+        means_frobed = frobenize(means - mean_G).to(self.device) # C x D
+    
         weights = weights if idxs is None else weights[idxs]
-        weights_normed = normalize(weights).to(self.device)  # C x D
+        weights_frobed = frobenize(weights).to(self.device) # C x D
 
-        selected = (weights_normed[dims, :] + diff_normed[dims, :]) / 2
-        proj_means = selected @ diff_normed.mT
-        proj_cls = selected @ weights_normed.mT
+        selected = (weights_frobed[dims, :] + means_frobed[dims, :]) / 2
+        proj_means = selected @ means_frobed.mT
+        proj_cls = selected @ weights_frobed.mT
         return proj_means, proj_cls
 
     ## SAVING AND LOADING ##

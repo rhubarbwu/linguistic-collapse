@@ -9,6 +9,7 @@ from torch import (Tensor, bfloat16, float16, float32, int8, int16, int32,
                    int64, uint8)
 from tqdm import tqdm
 
+frobenize = lambda x: x / la.norm(x)
 normalize = lambda x: x / (la.norm(x, dim=-1, keepdim=True) + pt.finfo(x.dtype).eps)
 get_dev_name = lambda d: "cpu" if d == "cpu" else pt.cuda.get_device_name(d)
 

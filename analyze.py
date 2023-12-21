@@ -194,10 +194,10 @@ for iden in IDENTIFIERS:
             commit(args.output_file, "dual_diff", dual_diff, iden)
             del dual_diff
 
-            dual_dot, proj_m, proj_c = collected.dot_duality(W, indices, args.dims)
+            dual_dot = collected.dot_duality(W, indices)
             commit(args.output_file, "dual_dot_mean", dual_dot.mean(), iden)
             commit(args.output_file, "dual_dot_std", dual_dot.std(), iden)
-            del W, proj_m, proj_c
+            del W
 
             if args.histograms:
                 bins, edges = collect_hist(dual_dot, args.num_bins)
