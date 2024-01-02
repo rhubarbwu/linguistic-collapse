@@ -9,7 +9,8 @@ import numpy as np
 import torch as pt
 from torch import Tensor
 from torch.nn import Identity
-from transformers import CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING, AutoConfig
+from transformers import (CONFIG_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING,
+                          AutoConfig)
 from transformers import AutoModelForCausalLM as AutoCLM
 from transformers import AutoTokenizer
 
@@ -124,6 +125,14 @@ class ModelArguments:
         },
     )
 
+    name_split: str = field(
+        default="x",
+        metadata={
+            "help": ("Which group of models to analyze."),
+            "choices": ["x", "y", "z"],
+        },
+    )
+
     def __post_init__(self):
         if self.config_overrides is not None and (
             self.config_name is not None or self.model_name_or_path is not None
@@ -221,9 +230,9 @@ def get_model(
     return model
 
 
-def split_parts(model_iden_or_name: str) -> Tuple[int, int, int]:
+def split_parts(model_iden_or_name: str, split: str) -> Tuple[int, int, int]:
     iden = identify(model_iden_or_name)
-    depth_str, width_ckpt_str = iden.split("x")
+    depth_str, width_ckpt_str = iden.split(split)
     width_str, ckpt_str = width_ckpt_str.split("@")
 
     return int(depth_str), int(width_str), int(ckpt_str)
@@ -257,7 +266,7 @@ def get_model_stats(model_name: str, args: Namespace) -> Dict[str, np.number]:
 
     state_file = f"{model_path}/trainer_state.json"
     if os.path.exists(state_file):
-        _, _, idx = split_parts(model_name)
+        _, _, idx = split_parts(model_name, args.split_char)
         with open(state_file, "r") as f:
             data = json.load(f)
         log = data["log_history"]
@@ -275,7 +284,7 @@ def get_classifier_weights(model_name: str, args: Namespace) -> Optional[Tensor]
     if os.path.exists(classifier_file):
         return pt.load(classifier_file, args.device)
 
-    _, _, ckpt_idx = split_parts(model_name)
+    _, _, ckpt_idx = split_parts(model_name, args.split_char)
     ckpt_path = select_ckpt(model_path, ckpt_idx)
     if ckpt_path is None:
         print(f"W: model checkpoint at index {ckpt_idx} not found")

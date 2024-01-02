@@ -183,8 +183,9 @@ class Statistics:
         """Compute norms of class means for measure equinormness of NC2/GCN2.
         idxs: classes to select for subsampled computation.
         """
-        means, _ = self.compute_means(idxs)
-        norms = means.norm(dim=-1) ** 2  # C'
+        means, mean_G = self.compute_means(idxs)
+        mean_diffs = means - mean_G  # C' x D
+        norms = mean_diffs.norm(dim=-1) ** 2  # C'
 
         return norms
 
@@ -222,13 +223,13 @@ class Statistics:
         idxs: classes to select for subsampled computation.
         """
         means, mean_G = self.compute_means(idxs)
-        means_frobed = frobenize(means - mean_G).to(self.device) # C x D
-    
-        weights = weights if idxs is None else weights[idxs]
-        weights_frobed = frobenize(weights).to(self.device) # C x D
+        means_frobed = frobenize(means - mean_G).to(self.device)  # C x D
 
-        duality = la.norm(weights_frobed - means_frobed) # 1
-        
+        weights = weights if idxs is None else weights[idxs]
+        weights_frobed = frobenize(weights).to(self.device)  # C x D
+
+        duality = la.norm(weights_frobed - means_frobed)  # 1
+
         return duality.cpu()
 
     def dot_duality(
@@ -243,12 +244,12 @@ class Statistics:
         dims: dimensions on which to project the weights and mean norms
         """
         means, mean_G = self.compute_means(idxs)
-        means_frobed = frobenize(means - mean_G).to(self.device) # C x D
-    
-        weights = weights if idxs is None else weights[idxs]
-        weights_frobed = frobenize(weights).to(self.device) # C x D
+        means_normed = normalize(means - mean_G).to(self.device)  # C x D
 
-        dot_prod = means_frobed * weights_frobed  # C x D
+        weights = weights if idxs is None else weights[idxs]
+        weights_normed = normalize(weights).to(self.device)  # C x D
+
+        dot_prod = means_normed * weights_normed  # C x D
         result = pt.sum(dot_prod, dim=1)  # C
 
         return result
@@ -260,14 +261,14 @@ class Statistics:
         dims: Tuple[int] = None,
     ):
         means, mean_G = self.compute_means(idxs)
-        means_frobed = frobenize(means - mean_G).to(self.device) # C x D
-    
-        weights = weights if idxs is None else weights[idxs]
-        weights_frobed = frobenize(weights).to(self.device) # C x D
+        means_normed = normalize(means - mean_G).to(self.device)  # C x D
 
-        selected = (weights_frobed[dims, :] + means_frobed[dims, :]) / 2
-        proj_means = selected @ means_frobed.mT
-        proj_cls = selected @ weights_frobed.mT
+        weights = weights if idxs is None else weights[idxs]
+        weights_normed = normalize(weights).to(self.device)  # C x D
+
+        selected = (weights_normed[dims, :] + means_normed[dims, :]) / 2
+        proj_means = selected @ means_normed.mT
+        proj_cls = selected @ weights_normed.mT
         return proj_means, proj_cls
 
     ## SAVING AND LOADING ##

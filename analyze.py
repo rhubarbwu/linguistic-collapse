@@ -17,6 +17,10 @@ COL_WIDTH = 6
 parser = ArgumentParser()
 
 parser.add_argument("-dev", "--device", type=str, default="cpu")
+parser.add_argument("-f", "--force", action="store_true")
+parser.add_argument("-1", "--single", action="store_true")
+parser.add_argument("-v", "--verbose", action="store_true")
+
 parser.add_argument(
     "-total",
     "--totals",
@@ -28,8 +32,6 @@ parser.add_argument(
 parser.add_argument("-i", "--input_files", type=str, nargs="+", default=[])
 parser.add_argument("-o", "--output_file", type=str, default="analysis.h5")
 parser.add_argument("-mc", "--model_cache", type=str, default=".")
-parser.add_argument("-f", "--force", action="store_true")
-parser.add_argument("-1", "--single", action="store_true")
 
 parser.add_argument("-prog", "--progress", action="store_true")
 parser.add_argument("-loss", "--model_stats", action="store_true")
@@ -41,6 +43,7 @@ parser.add_argument("-snr", "-cdnv", "--inv_snr", action="store_true")
 parser.add_argument("-all", "--analysis", action="store_true")
 parser.add_argument("-each", "--each_model", action="store_true")
 parser.add_argument("-hist", "--histograms", action="store_true")
+parser.add_argument("-freq", "--frequency", action="store_true")
 
 parser.add_argument("-mpc", "--min_per_class", type=int, default=1)
 parser.add_argument("-Mpc", "--max_per_class", type=int, default=None)
@@ -105,7 +108,9 @@ for iden in PATHS:
     del collected
 
 
-IDENTIFIERS = sorted(PATHS.keys(), key=lambda x: split_parts(x)[1])  # sort by dim
+IDENTIFIERS = sorted(
+    PATHS.keys(), key=lambda x: split_parts(x, args.split_char)[1]
+)  # sort by dim
 LONGEST_IDEN = max(5, max([len(iden) for iden in IDENTIFIERS]))
 
 if args.progress:
@@ -148,7 +153,10 @@ def triu_stats_histogram(data: pt.Tensor, key: str):
 
 for iden in IDENTIFIERS:
     if iden not in PATHS:
+        print("SKIPPING", iden)
         continue
+    if args.verbose:
+        print("ANALYZE", iden)
 
     collected: Statistics = get_stats(iden)
 
@@ -164,9 +172,11 @@ for iden in IDENTIFIERS:
 
     if args.norms:
         norms = collected.mean_norms(indices)
-        commit(args.output_file, "norms", norms, iden)
         commit(args.output_file, "norms_mean", norms.mean(), iden)
         commit(args.output_file, "norms_std", norms.std(), iden)
+
+        if args.frequency:
+            commit(args.output_file, "norms", norms, iden)
 
         if args.histograms:
             bins, edges = collect_hist(norms.unsqueeze(0), args.num_bins)
