@@ -3,8 +3,6 @@ from typing import Any, Optional, Tuple
 import torch as pt
 import torch.linalg as la
 from h5py import File
-from sklearn.cluster import KMeans, MiniBatchKMeans, SpectralClustering
-from sklearn.mixture import GaussianMixture
 from torch import Tensor
 from tqdm import tqdm
 
@@ -23,56 +21,6 @@ def apply_pca(data: Tensor, K: int = 2) -> Tensor:
 
     projected = pt.mm(data, eig_vecs[:, :K])
     return projected
-
-
-def cluster_gmm(data, K):
-    gmm = GaussianMixture(n_components=K, random_state=0)
-    labels = gmm.fit_predict(data.cpu())
-    means = gmm.means_
-    del gmm
-    return labels, means
-
-
-def cluster_kmeans(data, K):
-    KM = KMeans if data.shape[0] < 16384 else MiniBatchKMeans
-
-    kmeans = KM(n_clusters=K, random_state=0, n_init="auto")
-    labels = kmeans.fit_predict(data.cpu())
-    centres = kmeans.cluster_centers_
-    del kmeans
-    return labels, centres
-
-
-def cluster_spectral(data, K):
-    spectral = SpectralClustering(n_clusters=K)
-    labels = spectral.fit_predict(data)
-    del spectral
-    return labels
-
-
-def compute_centroids(
-    data: Tensor, K: int = 1, weights: Tensor = None
-) -> Tuple[Tensor, Tensor]:
-    assert data.shape[0] == weights.shape[0]
-
-    if K == 1:
-        labels = pt.zeros(len(weights), dtype=pt.uint8, device=data.device)
-    elif K > 1:
-        labels, centroids = cluster_kmeans(data, K)
-        if weights is None:  # unweighted centroids
-            return labels, pt.tensor(centroids, device=data.device)
-
-    eps = pt.finfo(data.dtype).eps
-
-    # weighted centroids
-    centroids = pt.zeros(K, data.shape[-1], device=data.device)
-    for r in range(K):
-        data_r = data[labels == r]
-        weights_r = weights[labels == r].to(data.dtype)
-        total_r = weights_r.sum() + eps
-        centroids[r] = weights_r.mT @ data_r / total_r
-
-    return labels, centroids
 
 
 def triu_mean(data: Tensor, desc: str = "means") -> pt.float:

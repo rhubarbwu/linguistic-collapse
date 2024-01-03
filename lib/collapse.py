@@ -173,7 +173,7 @@ class Statistics:
             var_avgs = (vars_normed[c] + vars_normed).squeeze() / 2
             means_diff = means[c] - means
             inner = pt.sum(means_diff * means_diff, dim=-1)
-            CDNVs[c] = var_avgs.squeeze(0) / inner
+            CDNVs[c] = var_avgs.squeeze(0) / inner / inner
 
         return CDNVs
 
@@ -203,19 +203,18 @@ class Statistics:
 
         return interference  # C' x C'
 
-    def geodesic_surplus(
+    def geodesic_distances(
         self, idxs: List[int] = None, kernel: callable = log_kernel
     ) -> Tensor:
-        """Compute geodesic surpluses towards to measure convergence to
+        """Compute geodesic distances towards to measure convergence to
         hyperspherical uniformity (GNC2, https://arxiv.org/abs/2303.06484).
         idxs: classes to select for subsampled computation.
         kernel: how to compute geodesic distance between points.
         """
         means, _ = self.compute_means(idxs)
         dists = kernel(means)  # C' x C'
-        surplus = dists - dists.min()
 
-        return surplus  # C' x C'
+        return dists  # C' x C'
 
     def diff_duality(self, weights: Tensor, idxs: List[int] = None) -> pt.float:
         """Compute self-duality (NC3).

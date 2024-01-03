@@ -111,18 +111,19 @@ for iden in PATHS:
 IDENTIFIERS = sorted(
     PATHS.keys(), key=lambda x: split_parts(x, args.split_char)[1]
 )  # sort by dim
-LONGEST_IDEN = max(5, max([len(iden) for iden in IDENTIFIERS]))
+LAST_INDEX = f"total ({len(IDENTIFIERS)})"
+LONGEST_IDEN = max(len(LAST_INDEX), max([len(iden) for iden in IDENTIFIERS]))
 
 if args.progress:
     print(LINE_SEP)
     head = [p.rjust(COL_WIDTH) for p in ["means", "(seqs)", "vars", "(seqs)", "unique"]]
-    print("model".ljust(LONGEST_IDEN + 1), *head)
+    print(f"model".ljust(LONGEST_IDEN + 1), *head)
     for iden in IDENTIFIERS:
         Ns = PROGRESS[iden]
         row = [str(n).rjust(COL_WIDTH) for n in Ns]
         print(iden.ljust(LONGEST_IDEN + 1), *row)
     row = [str(n).rjust(COL_WIDTH) for n in args.totals[:2] + args.totals]
-    print("total".ljust(LONGEST_IDEN + 1), *row)
+    print(LAST_INDEX.ljust(LONGEST_IDEN + 1), *row)
 
 
 print(LINE_SEP)
@@ -193,9 +194,9 @@ for iden in IDENTIFIERS:
 
     if args.geodesic:
         kernel = riesz_kernel if "riesz" in args.geodesic else log_kernel
-        surplus = collected.geodesic_surplus(indices, kernel)
-        triu_stats_histogram(surplus, f"geodesic_{args.geodesic}")
-        del surplus
+        distances = collected.geodesic_distances(indices, kernel)
+        triu_stats_histogram(distances, f"geodesic_{args.geodesic}")
+        del distances
 
     if args.duality:
         W = get_classifier_weights(f"TS{iden}", args)
