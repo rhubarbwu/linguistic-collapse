@@ -35,12 +35,12 @@ parser.add_argument("-mc", "--model_cache", type=str, default=".")
 
 parser.add_argument("-prog", "--progress", action="store_true")
 parser.add_argument("-loss", "--model_stats", action="store_true")
-parser.add_argument("-nor", "--norms", action="store_true")
-parser.add_argument("-etf", "--interfere", action="store_true")
-parser.add_argument("-geo", "--geodesic", "--hypersphere", type=str, default=None)
-parser.add_argument("-dual", "--duality", action="store_true")
-parser.add_argument("-snr", "-cdnv", "--inv_snr", action="store_true")
-parser.add_argument("-all", "--analysis", action="store_true")
+parser.add_argument("-snr", "-cdnv", "--inv_snr", action="store_true")  # NC1 (Galanti)
+parser.add_argument("-nor", "--norms", action="store_true")  # (G)NC2
+parser.add_argument("-etf", "--interfere", action="store_true")  # NC2
+parser.add_argument("-geo", "--geodesic", type=str, default=None)  # GNC2
+parser.add_argument("-dual", "--duality", action="store_true")  # NC3
+parser.add_argument("-decs", "--decisions", action="store_true")  # NC4
 parser.add_argument("-each", "--each_model", action="store_true")
 parser.add_argument("-hist", "--histograms", action="store_true")
 parser.add_argument("-freq", "--frequency", action="store_true")
@@ -59,11 +59,9 @@ if "cuda" in args.device and not pt.cuda.is_available():
     args.device = "cpu"
 
 
-if args.analysis:
-    args.norms = args.coherence = args.geodesic = True
-    args.model_stats = args.duality = args.inv_snr = True
-args.analysis |= args.norms | args.interfere | (args.geodesic is not None)
-args.analysis |= args.model_stats | args.duality | args.inv_snr
+ANALYSIS = args.model_stats
+ANALYSIS |= args.inv_snr | args.duality | args.decisions  # NC1,3,4
+ANALYSIS |= args.norms | args.interfere | (args.geodesic is not None)  # (G)NC2
 
 
 PATHS = {}
@@ -72,11 +70,12 @@ for file in args.input_files:
         continue
     iden = identify(file)
     if iden not in PATHS:
-        PATHS[iden] = (None, None)
+        PATHS[iden] = (None, None, None)
 
     means_path = file if "means" in file else PATHS[iden][0]
     vars_path = file if "vars" in file else PATHS[iden][1]
-    PATHS[iden] = (means_path, vars_path)
+    decs_path = file if "decs" in file else PATHS[iden][2]
+    PATHS[iden] = (means_path, vars_path, decs_path)
 
 
 def get_stats(iden):
@@ -84,6 +83,7 @@ def get_stats(iden):
         device=args.device,
         load_means=PATHS[iden][0],
         load_vars=PATHS[iden][1],
+        load_decs=PATHS[iden][2],
         verbose=False,
     )
     return stats
@@ -97,12 +97,14 @@ INCOMPLETE = []
 
 for iden in PATHS:
     collected: Statistics = get_stats(iden)
-    Ns = (collected.N1, collected.N1_seqs, collected.N2, collected.N2_seqs)
-    if Ns[0] != args.totals[0] or Ns[1] != args.totals[1]:
+    Ns = (collected.N1, collected.N2, collected.N3)
+    Ns_seqs = (collected.N1_seqs, collected.N2_seqs, collected.N3_seqs)
+    if not (Ns[0] == Ns[1] == Ns[2] == args.totals[0]):
         INCOMPLETE.append(iden)
 
     if args.progress:
-        PROGRESS[iden] = (*Ns, collected.counts_in_range(args.min_per_class).shape[0])
+        N_unique = collected.counts_in_range(args.min_per_class).shape[0]
+        PROGRESS[iden] = (*Ns_seqs, N_unique)
         COL_WIDTH = max(COL_WIDTH, max(len(str(n)) for n in PROGRESS[iden]))
 
     del collected
@@ -116,19 +118,21 @@ LONGEST_IDEN = max(len(LAST_INDEX), max([len(iden) for iden in IDENTIFIERS]))
 
 if args.progress:
     print(LINE_SEP)
-    head = [p.rjust(COL_WIDTH) for p in ["means", "(seqs)", "vars", "(seqs)", "unique"]]
+    head = [p.rjust(COL_WIDTH) for p in ["means", "vars", "decs", "unique"]]
     print(f"model".ljust(LONGEST_IDEN + 1), *head)
     for iden in IDENTIFIERS:
         Ns = PROGRESS[iden]
         row = [str(n).rjust(COL_WIDTH) for n in Ns]
         print(iden.ljust(LONGEST_IDEN + 1), *row)
-    row = [str(n).rjust(COL_WIDTH) for n in args.totals[:2] + args.totals]
+    row = [args.totals[1]] * 3 + [args.totals[-1]]
+    row = [str(n).rjust(COL_WIDTH) for n in row]
     print(LAST_INDEX.ljust(LONGEST_IDEN + 1), *row)
 
 
 print(LINE_SEP)
-if not args.analysis:
+if not ANALYSIS:
     exit()
+
 
 for iden in INCOMPLETE:
     del PATHS[iden]
@@ -171,20 +175,47 @@ for iden in IDENTIFIERS:
         for stat_key in train_stats.keys():
             commit(args.output_file, stat_key, train_stats[stat_key], iden)
 
+    if args.inv_snr:  # NC1
+        CDNVs = collected.compute_vars(indices)
+        if CDNVs is not None and collected.N2 == args.totals[0]:
+            mean = triu_mean(CDNVs)
+            std = triu_std(CDNVs, mean)
+            commit(args.output_file, "cdnv_mean", mean, iden)
+            commit(args.output_file, "cdnv_std", std, iden)
+
+            if args.histograms:
+                pt.log_(CDNVs)
+                bins, edges = collect_hist(CDNVs, args.num_bins, True)
+                commit(args.output_file, "cdnv_bins", bins, iden)
+                commit(args.output_file, "cdnv_edges", edges, iden)
+                del bins, edges
+
+            del CDNVs
+
     if args.norms:
-        norms = collected.mean_norms(indices)
+        norms = collected.mean_norms(indices, False, False)
         commit(args.output_file, "norms_mean", norms.mean(), iden)
         commit(args.output_file, "norms_std", norms.std(), iden)
 
+        norms_scaled = collected.mean_norms(indices, False, True)
+        commit(args.output_file, "norms_scaled_mean", norms_scaled.mean(), iden)
+        commit(args.output_file, "norms_scaled_std", norms_scaled.std(), iden)
+
+        norms_logged = collected.mean_norms(indices, True, False)
+        commit(args.output_file, "norms_logged_mean", norms_logged.mean(), iden)
+        commit(args.output_file, "norms_logged_std", norms_logged.std(), iden)
+
+        norms_logscaled = collected.mean_norms(indices, True, True)
+        commit(args.output_file, "norms_logscaled_mean", norms_logscaled.mean(), iden)
+        commit(args.output_file, "norms_logscaled_std", norms_logscaled.std(), iden)
+
         if args.frequency:
             commit(args.output_file, "norms", norms, iden)
-
         if args.histograms:
             bins, edges = collect_hist(norms.unsqueeze(0), args.num_bins)
             commit(args.output_file, "norms_bins", bins, iden)
             commit(args.output_file, "norms_edges", edges, iden)
             del bins, edges
-
         del norms
 
     if args.interfere:
@@ -218,23 +249,14 @@ for iden in IDENTIFIERS:
 
             del dual_dot
 
-    if args.inv_snr:
-        CDNVs = collected.compute_vars(indices)
-        if CDNVs is not None and collected.N2 == args.totals[0]:
-            mean = triu_mean(CDNVs)
-            std = triu_std(CDNVs, mean)
-            commit(args.output_file, "cdnv_mean", mean, iden)
-            commit(args.output_file, "cdnv_std", std, iden)
+    if args.decisions:
+        matches, misses = collected.matches[indices], collected.misses[indices]
+        commit(args.output_file, "matches", matches.sum(), iden)
+        commit(args.output_file, "misses", misses.sum(), iden)
 
-            if args.histograms:
-                pt.log_(CDNVs)
-                bins, edges = collect_hist(CDNVs, args.num_bins, True)
-                commit(args.output_file, "cdnv_bins", bins, iden)
-                commit(args.output_file, "cdnv_edges", edges, iden)
-                del bins, edges
-
-            del CDNVs
-
+        matches = matches.float()
+        commit(args.output_file, "matches_mean", matches.mean(), iden)
+        commit(args.output_file, "matches_std", matches.std(), iden)
     del collected
 
 

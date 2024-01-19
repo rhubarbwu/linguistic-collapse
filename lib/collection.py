@@ -100,20 +100,23 @@ def collect_embeddings(
 
     means_dir = f"{args.stats_dir}/means@{args.model_ckpt_idx}"
     vars_dir = f"{args.stats_dir}/vars@{args.model_ckpt_idx}"
+    decs_dir = f"{args.stats_dir}/decs@{args.model_ckpt_idx}"
 
     makedirs(args.stats_dir, exist_ok=True)
     makedirs(means_dir, exist_ok=True)
     makedirs(vars_dir, exist_ok=True)
+    makedirs(decs_dir, exist_ok=True)
 
     model_name = model_args.model_name_or_path.split("/")[-1]
     means_path = f"{means_dir}/{model_name}@{args.model_ckpt_idx}-means.pt"
     vars_path = f"{vars_dir}/{model_name}@{args.model_ckpt_idx}-vars.pt"
+    decs_path = f"{decs_dir}/{model_name}@{args.model_ckpt_idx}-decs.pt"
 
     N_seqs = len(data)
     extract = lambda i: pt.tensor(data[i]["input_ids"], dtype=pt.int32)
     N_batches = int(math.ceil(N_seqs / args.batch_size))
 
-    model, C, D = strip_model(model, args.device)
+    C, D, model, W = strip_model(model, args.device)
     stats = Statistics(C, D, args.device)
 
     N_seen = 0
@@ -122,6 +125,10 @@ def collect_embeddings(
     elif args.stage == "vars":  # second pass
         stats.load_totals(means_path)
         N_seen = stats.load_var_sums(vars_path)
+    elif args.stage == "decs":
+        stats.load_totals(means_path)
+        N_seen = stats.load_decs(decs_path)
+
     N_batches_seen = int(math.ceil(N_seen / args.batch_size))
     if N_seen > 0:
         print(f"skipping {N_seen} sequences ({N_batches_seen} batches) already seen...")
@@ -135,6 +142,8 @@ def collect_embeddings(
             stats.collect_means(X, Y, len(batch))
         elif args.stage == "vars":  # second pass
             stats.collect_vars(X, Y, len(batch))
+        elif args.stage == "decs":  # third pass
+            stats.collect_decs(X, Y, W, len(batch))
 
         if (b_idx + 1) % (args.save_every // args.batch_size) != 0:
             continue  # don't save on most iterations
@@ -143,6 +152,8 @@ def collect_embeddings(
             stats.save_totals(means_path, args.verbose)
         elif args.stage == "vars":
             stats.save_var_sums(vars_path, args.verbose)
+        elif args.stage == "decs":
+            stats.save_decs(decs_path, args.verbose)
 
         if args.single:
             break
@@ -151,3 +162,5 @@ def collect_embeddings(
         stats.save_totals(means_path, args.verbose)
     elif args.stage == "vars":
         stats.save_var_sums(vars_path, args.verbose)
+    elif args.stage == "decs":
+        stats.save_decs(decs_path, args.verbose)

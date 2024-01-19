@@ -238,12 +238,14 @@ def split_parts(model_iden_or_name: str, split: str) -> Tuple[int, int, int]:
     return int(depth_str), int(width_str), int(ckpt_str)
 
 
-def strip_model(model: AutoCLM, device: str = "cpu") -> Tuple[AutoCLM, int, int]:
+def strip_model(
+    model: AutoCLM, device: str = "cpu"
+) -> Tuple[int, int, AutoCLM, Tensor]:
     C, D = model.lm_head.out_features, model.lm_head.in_features
+    W = list(model.lm_head.parameters())[0].detach()
     del model.lm_head
     model.lm_head = Identity()
-    model.to(device)
-    return model, C, D
+    return C, D, model.to(device), W.to(device)
 
 
 def get_model_stats(model_name: str, args: Namespace) -> Dict[str, np.number]:

@@ -54,7 +54,7 @@ def clean_up(*garbage: List[Any]):
         pt.cuda.empty_cache()
 
 
-CRUFT = ["TS", ".pt", "means-", "vars-", "-means", "-vars"]
+CRUFT = ["TS", ".pt", "means-", "vars-", "-means", "-vars", "-decs"]
 
 
 def identify(path: str) -> str:

@@ -25,6 +25,7 @@ class Statistics:
         dtype: pt.dtype = pt.float32,
         load_means: str = None,
         load_vars: str = None,
+        load_decs: str = None,
         verbose: bool = True,
     ):
         """
@@ -45,9 +46,11 @@ class Statistics:
             self.load_totals(load_means, verbose)
         if load_vars:
             self.load_var_sums(load_vars, verbose)
+        if load_decs:
+            self.load_decs(load_decs, verbose)
 
         self.ctype = select_int_type(self.C)
-        if load_means and load_vars:
+        if load_means and load_vars and load_decs:
             return
 
         if not load_means:
@@ -58,6 +61,12 @@ class Statistics:
         if not load_vars:
             self.N2, self.N2_seqs = 0, 0  # counts of samples/sequences for vars pass
             self.var_sums = pt.zeros(self.C, dtype=dtype).to(device)
+
+        if not load_decs:
+            self.N3 = 0
+            self.N3_seqs = 0
+            self.matches = pt.zeros(self.C, dtype=pt.int32).to(device)
+            self.misses = pt.zeros(self.C, dtype=pt.int32).to(device)
 
     def move_to(self, device: str = "cpu"):
         self.counts = self.counts.to(device)
@@ -109,16 +118,15 @@ class Statistics:
         Y (B x 1): class labels
         """
 
-        idxs = self.counts_in_range()
-        means, mean_G = self.compute_means(idxs)
-
         assert X.shape[-1] == self.D
         assert X.shape[0] == Y.shape[0]
+
+        idxs = self.counts_in_range()
+        means, _ = self.compute_means(idxs)
 
         if self.N2 + Y.shape[0] > self.N1:
             print("  W: this batch would exceed means samples")
             print(f"  {self.N2}+{Y.shape[0]} > {self.N1}")
-
         self.N2 += Y.shape[0]
         self.N2_seqs += B
 
@@ -127,6 +135,45 @@ class Statistics:
         self.var_sums.scatter_add_(0, Y, pt.sum(diffs * diffs, dim=-1))
 
         return self.var_sums
+
+    def collect_decs(
+        self, X: Tensor, Y: Tensor, W: Tensor, B: int = 1
+    ) -> Tuple[Tensor, Tensor]:
+        """Third pass: increment samples where near-class and model classifiers agree.
+        B: batch size
+        X (B x D): feature vectors
+        Y (B x 1): class labels
+        W (C x D): model classifier weights
+        """
+
+        idxs = self.counts_in_range()
+        means, _ = self.compute_means(idxs)  # C x D
+
+        if self.N3 + Y.shape[0] > self.N1:
+            print("  W: this batch would exceed means samples")
+            print(f"  {self.N3}+{Y.shape[0]} > {self.N1}")
+        self.N3 += Y.shape[0]
+        self.N3_seqs += B
+
+        # linear predictions
+        pred_lin = (X @ W.mT).argmax(dim=-1)  # B
+
+        # NCC predictions decomposed
+        dots = pt.inner(X, means)  # B x C
+        features = pt.norm(X, dim=-1) ** 2  # B x 1
+        centres = pt.norm(means, dim=-1) ** 2  # 1 x C
+        dists = features.unsqueeze(1) + centres.unsqueeze(0) - 2 * dots  # B x C
+        pred_ncc = dists.argmin(dim=-1)  # B
+
+        # count matches and misses between classifiers
+        matches = (pred_lin == pred_ncc).to(pt.int32)  # B
+
+        # increment matches/misses to label classes
+        Y = Y.to(self.device).to(pt.int64)
+        self.matches.scatter_add_(0, Y, matches)
+        self.misses.scatter_add_(0, Y, (1 - matches))
+
+        return self.matches.sum(), self.misses.sum()
 
     def compute_means(
         self, idxs: List[int] = None, weighted: bool = False
@@ -179,14 +226,19 @@ class Statistics:
 
     ## COLLAPSE MEASURES ##
 
-    def mean_norms(self, idxs: List[int] = None) -> Tensor:
+    def mean_norms(
+        self, idxs: List[int] = None, log: bool = False, dim_norm: bool = False
+    ) -> Tensor:
         """Compute norms of class means for measure equinormness of NC2/GCN2.
         idxs: classes to select for subsampled computation.
         """
         means, mean_G = self.compute_means(idxs)
         mean_diffs = means - mean_G  # C' x D
         norms = mean_diffs.norm(dim=-1) ** 2  # C'
-
+        if dim_norm:
+            norms /= self.D**0.5
+        if log:
+            norms = norms.log()
         return norms
 
     def interference(self, idxs: List[int] = None, patch_size: int = None) -> Tensor:
@@ -346,6 +398,47 @@ class Statistics:
         if verbose:
             print(f"LOADED vars from {file}; {self.N2} in {self.N2_seqs} seqs")
         return self.N2_seqs
+
+    def save_decs(self, file: str, verbose: bool = False) -> str:
+        data = {
+            "hash": self.hash,
+            "C": self.C,
+            "D": self.D,
+            "N": self.N3,
+            "N_seqs": self.N3_seqs,
+            "matches": self.matches,
+            "misses": self.misses,
+        }
+        pt.save(data, file)
+
+        if verbose:
+            print(f"SAVED vars to {file}; {self.N3} in {self.N3_seqs} seqs")
+            print(f"  MEANS HASH: {self.hash}")
+        return file
+
+    def load_decs(self, file: str, verbose: bool = True) -> int:
+        means_file = file.replace("decs", "means")
+        if not self.load_totals(means_file, False):
+            print("  W: means not found; please collect them first")
+            return 0
+
+        if not os.path.isfile(file):
+            print(f"  W: path {file} not found; need to collect decs from scratch")
+            return 0
+
+        data = pt.load(file, self.device)
+        assert data["hash"] == self.hash, "decs based on outdated means"
+
+        self.C, self.D = data["C"], data["D"]
+        self.N3 = data["N"]
+        self.N3_seqs = data["N_seqs"]
+        self.matches = data["matches"]
+        self.misses = data["misses"]
+
+        if verbose:
+            print(f"LOADED decs from {file}; {self.N3} in {self.N3_seqs} seqs")
+
+        return self.N3_seqs
 
 
 if __name__ == "__main__":
