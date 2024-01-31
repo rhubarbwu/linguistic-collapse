@@ -1,5 +1,7 @@
+from os.path import exists
 from typing import Any, Optional, Tuple
 
+import pandas as pd
 import torch as pt
 import torch.linalg as la
 from h5py import File
@@ -94,8 +96,26 @@ def collect_hist(
     return hist, edges
 
 
+def create_df(path: str) -> pd.DataFrame:
+    path = f"{path}.csv"
+    if exists(path):
+        df = pd.read_csv(path)
+    else:
+        df = pd.DataFrame({"model": []})
+    df = df.set_index("model")
+    return df
+
+
+def update_df(df: pd.DataFrame, metric: str, new_val: Any, entry: Optional[str] = None):
+    if entry and len(new_val.shape) == 0:
+        new_val = new_val.item()
+        if metric not in df:
+            df[metric] = pd.Series(dtype=type(new_val))
+        df.at[entry, metric] = new_val
+
+
 def commit(path: str, metric: str, new_val: Any, entry: Optional[str] = None):
-    with File(path, "a") as file:
+    with File(f"{path}.h5", "a") as file:
         if new_val is not None and entry is not None:
             if metric not in file:
                 file.create_group(metric)

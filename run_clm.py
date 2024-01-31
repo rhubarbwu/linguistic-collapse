@@ -250,7 +250,7 @@ def main():
             preds = preds[:, :-1].reshape(-1)
             return metric.compute(predictions=preds, references=labels)
 
-    if model_args.model_name_or_path:
+    if model_args.model_name_or_path and coll_args.do_collect:
         pt.set_grad_enabled(False)
         collect_embeddings(coll_args, model_args, model, lm_datasets["train"])
 
@@ -315,10 +315,9 @@ def main():
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
-    kwargs = {
-        "finetuned_from": model_args.model_name_or_path,
-        "tasks": "text-generation",
-    }
+    kwargs = {"tasks": "text-generation"}
+    model.config._name_or_path = train_args.hub_model_id
+
     if data_args.dataset_name is not None:
         kwargs["dataset_tags"] = data_args.dataset_name
         if data_args.dataset_config_name is not None:

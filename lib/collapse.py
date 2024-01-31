@@ -3,13 +3,11 @@ from hashlib import sha256
 from typing import List, Tuple, Union
 
 import torch as pt
-import torch.linalg as la
 from torch import Tensor
 from tqdm import tqdm
 
 from lib.statistics import collect_hist, triu_mean, triu_std
-from lib.utils import (frobenize, inner_product, log_kernel, normalize,
-                       select_int_type)
+from lib.utils import inner_product, log_kernel, normalize, select_int_type
 from lib.visualization import plot_histogram
 
 means_path = lambda name: f"means/{name}-means.pt"
@@ -268,22 +266,24 @@ class Statistics:
 
         return dists  # C' x C'
 
-    def diff_duality(self, weights: Tensor, idxs: List[int] = None) -> pt.float:
-        """Compute self-duality (NC3).
+    def dual_dists(self, weights: Tensor, idxs: List[int] = None) -> pt.float:
+        """Compute distances between means and classifier.
+        The average of this matrix measures convergence to self-duality (NC3).
         weights (C x D): weights of the linear classifier
         idxs: classes to select for subsampled computation.
         """
         means, mean_G = self.compute_means(idxs)
-        means_frobed = frobenize(means - mean_G).to(self.device)  # C x D
+        means_normed = normalize(means - mean_G).to(self.device)  # C x D
 
         weights = weights if idxs is None else weights[idxs]
-        weights_frobed = frobenize(weights).to(self.device)  # C x D
+        weights_normed = normalize(weights).to(self.device)  # C x D
 
-        duality = la.norm(weights_frobed - means_frobed)  # 1
+        distances = normalize(weights_normed - means_normed)
+        result = pt.sum(distances, dim=1)
 
-        return duality.cpu()
+        return result
 
-    def dot_duality(
+    def similarity(
         self,
         weights: Tensor,
         idxs: List[int] = None,

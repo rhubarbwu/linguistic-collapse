@@ -2,10 +2,12 @@ from argparse import ArgumentParser
 from os.path import exists, isfile
 
 import torch as pt
+from pandas import DataFrame
 
 from lib.collapse import Statistics
 from lib.model import get_classifier_weights, get_model_stats, split_parts
-from lib.statistics import collect_hist, commit, triu_mean, triu_std
+from lib.statistics import (collect_hist, commit, create_df, triu_mean,
+                            triu_std, update_df)
 from lib.utils import identify, log_kernel, riesz_kernel
 
 pt.set_grad_enabled(False)
@@ -30,7 +32,7 @@ parser.add_argument(
 )
 
 parser.add_argument("-i", "--input_files", type=str, nargs="+", default=[])
-parser.add_argument("-o", "--output_file", type=str, default="analysis.h5")
+parser.add_argument("-o", "--output_file", type=str, default="analysis")
 parser.add_argument("-mc", "--model_cache", type=str, default=".")
 
 parser.add_argument("-prog", "--progress", action="store_true")
@@ -50,7 +52,6 @@ parser.add_argument("-Mpc", "--max_per_class", type=int, default=None)
 parser.add_argument("-ps", "--patch_size", type=int, default=1024)
 parser.add_argument("-nb", "--num_bins", type=int, default=1024)
 parser.add_argument("-d", "--dims", type=int, nargs=2, default=None)
-parser.add_argument("-split", "--split_char", type=str, default="x")
 
 args = parser.parse_args()
 
@@ -65,7 +66,7 @@ ANALYSIS |= args.norms | args.interfere | (args.geodesic is not None)  # (G)NC2
 
 
 PATHS = {}
-for file in args.input_files:
+for file in sorted(args.input_files, key=lambda x: x.split("/")[-1]):
     if not exists(file) or not isfile(file):
         continue
     iden = identify(file)
@@ -76,6 +77,9 @@ for file in args.input_files:
     vars_path = file if "vars" in file else PATHS[iden][1]
     decs_path = file if "decs" in file else PATHS[iden][2]
     PATHS[iden] = (means_path, vars_path, decs_path)
+    if args.single and None not in PATHS[iden]:
+        PATHS = {iden: PATHS[iden]}
+        break
 
 
 def get_stats(iden):
@@ -110,9 +114,7 @@ for iden in PATHS:
     del collected
 
 
-IDENTIFIERS = sorted(
-    PATHS.keys(), key=lambda x: split_parts(x, args.split_char)[1]
-)  # sort by dim
+IDENTIFIERS = sorted(PATHS.keys(), key=lambda x: split_parts(x)[1])  # sort by dim
 LAST_INDEX = f"total ({len(IDENTIFIERS)})"
 LONGEST_IDEN = max(len(LAST_INDEX), max([len(iden) for iden in IDENTIFIERS]))
 
@@ -142,12 +144,15 @@ if args.single:  # run the first one for debugging purposes
     IDENTIFIERS = IDENTIFIERS[0:1]
 
 
+df: DataFrame = create_df(args.output_file)
+
+
 def triu_stats_histogram(data: pt.Tensor, key: str):
     mean = triu_mean(data)
     std = triu_std(data, mean)
 
-    commit(args.output_file, f"{key}_mean", mean, iden)
-    commit(args.output_file, f"{key}_std", std, iden)
+    update_df(df, f"{key}_mean", mean, iden)
+    update_df(df, f"{key}_std", std, iden)
 
     if args.histograms:
         bins, edges = collect_hist(data, args.num_bins, True)
@@ -167,8 +172,8 @@ for iden in IDENTIFIERS:
 
     indices = collected.counts_in_range(args.min_per_class, args.max_per_class)
     counts = collected.counts[indices]
-    if "counts" not in file or len(file["counts"]) != len(counts):
-        commit(args.output_file, "counts", counts)
+    if not exists(f"{args.output_file}.h5"):
+        commit(f"{args.output_file}", "counts", counts)
 
     if args.model_stats:
         train_stats = get_model_stats(f"TS{iden}", args)
@@ -180,9 +185,8 @@ for iden in IDENTIFIERS:
         if CDNVs is not None and collected.N2 == args.totals[0]:
             mean = triu_mean(CDNVs)
             std = triu_std(CDNVs, mean)
-            commit(args.output_file, "cdnv_mean", mean, iden)
-            commit(args.output_file, "cdnv_std", std, iden)
-
+            update_df(df, "cdnv_mean", mean, iden)
+            update_df(df, "cdnv_std", std, iden)
             if args.histograms:
                 pt.log_(CDNVs)
                 bins, edges = collect_hist(CDNVs, args.num_bins, True)
@@ -192,22 +196,22 @@ for iden in IDENTIFIERS:
 
             del CDNVs
 
-    if args.norms:
+    if args.norms:  # NC2
         norms = collected.mean_norms(indices, False, False)
-        commit(args.output_file, "norms_mean", norms.mean(), iden)
-        commit(args.output_file, "norms_std", norms.std(), iden)
+        update_df(df, "norms_mean", norms.mean(), iden)
+        update_df(df, "norms_std", norms.std(), iden)
 
         norms_scaled = collected.mean_norms(indices, False, True)
-        commit(args.output_file, "norms_scaled_mean", norms_scaled.mean(), iden)
-        commit(args.output_file, "norms_scaled_std", norms_scaled.std(), iden)
+        update_df(df, "norms_scl_mean", norms_scaled.mean(), iden)
+        update_df(df, "norms_scl_std", norms_scaled.std(), iden)
 
         norms_logged = collected.mean_norms(indices, True, False)
-        commit(args.output_file, "norms_logged_mean", norms_logged.mean(), iden)
-        commit(args.output_file, "norms_logged_std", norms_logged.std(), iden)
+        update_df(df, "norms_log_mean", norms_logged.mean(), iden)
+        update_df(df, "norms_log_std", norms_logged.std(), iden)
 
         norms_logscaled = collected.mean_norms(indices, True, True)
-        commit(args.output_file, "norms_logscaled_mean", norms_logscaled.mean(), iden)
-        commit(args.output_file, "norms_logscaled_std", norms_logscaled.std(), iden)
+        update_df(df, "norms_logscl_mean", norms_logscaled.mean(), iden)
+        update_df(df, "norms_logscl_std", norms_logscaled.std(), iden)
 
         if args.frequency:
             commit(args.output_file, "norms", norms, iden)
@@ -218,46 +222,57 @@ for iden in IDENTIFIERS:
             del bins, edges
         del norms
 
-    if args.interfere:
+    if args.interfere:  # NC2
         interfere = collected.interference(indices, args.patch_size)
         triu_stats_histogram(interfere, "interfere")
         del interfere
 
-    if args.geodesic:
+    if args.geodesic:  # GNC2
         kernel = riesz_kernel if "riesz" in args.geodesic else log_kernel
         distances = collected.geodesic_distances(indices, kernel)
-        triu_stats_histogram(distances, f"geodesic_{args.geodesic}")
+        triu_stats_histogram(distances, f"{args.geodesic}_dist")
         del distances
 
-    if args.duality:
-        W = get_classifier_weights(f"TS{iden}", args)
-        if W is not None:
-            dual_diff = collected.diff_duality(W, indices)
-            commit(args.output_file, "dual_diff", dual_diff, iden)
-            del dual_diff
+    if args.duality:  # NC3
+        W = get_classifier_weights(f"TinyStories-{iden}", args)
 
-            dual_dot = collected.dot_duality(W, indices)
-            commit(args.output_file, "dual_dot_mean", dual_dot.mean(), iden)
-            commit(args.output_file, "dual_dot_std", dual_dot.std(), iden)
+        if W is None:
+            print("W: failed to load weights.")
+        else:
+            dists = collected.dual_dists(W, indices)
+            update_df(df, "dists_mean", dists.mean(), iden)
+            update_df(df, "dists_std", dists.std(), iden)
+            if args.histograms:
+                bins, edges = collect_hist(dists, args.num_bins)
+                commit(args.output_file, "dists_bins", bins, iden)
+                commit(args.output_file, "dists_edges", edges, iden)
+                del bins, edges
+            del dists
+
+            sims = collected.similarity(W, indices)
+            update_df(df, "sims_mean", sims.mean(), iden)
+            update_df(df, "sims_std", sims.std(), iden)
+            if args.histograms:
+                bins, edges = collect_hist(sims, args.num_bins)
+                commit(args.output_file, "sims_bins", bins, iden)
+                commit(args.output_file, "sims_edges", edges, iden)
+                del bins, edges
+            del sims
+
             del W
 
-            if args.histograms:
-                bins, edges = collect_hist(dual_dot, args.num_bins)
-                commit(args.output_file, "dual_bins", bins, iden)
-                commit(args.output_file, "dual_edges", edges, iden)
-                del bins, edges
-
-            del dual_dot
-
-    if args.decisions:
+    if args.decisions:  # NC4
         matches, misses = collected.matches[indices], collected.misses[indices]
-        commit(args.output_file, "matches", matches.sum(), iden)
-        commit(args.output_file, "misses", misses.sum(), iden)
+        update_df(df, "matches", matches.sum(), iden)
+        update_df(df, "misses", misses.sum(), iden)
 
-        matches = matches.float()
-        commit(args.output_file, "matches_mean", matches.mean(), iden)
-        commit(args.output_file, "matches_std", matches.std(), iden)
+    if args.force:
+        df.to_csv(f"{args.output_file}.csv")
+
     del collected
+
+
+df.to_csv(f"{args.output_file}.csv")
 
 
 print(LINE_SEP)

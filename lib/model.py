@@ -230,10 +230,11 @@ def get_model(
     return model
 
 
-def split_parts(model_iden_or_name: str, split: str) -> Tuple[int, int, int]:
+def split_parts(model_iden_or_name: str) -> Tuple[int, int, int]:
     iden = identify(model_iden_or_name)
-    depth_str, width_ckpt_str = iden.split(split)
-    width_str, ckpt_str = width_ckpt_str.split("@")
+    depth_str, rest_str = iden.split("x")
+    width_str, rest_str = rest_str.split("_")
+    opt_str, ckpt_str = rest_str.split("@")
 
     return int(depth_str), int(width_str), int(ckpt_str)
 
@@ -268,7 +269,7 @@ def get_model_stats(model_name: str, args: Namespace) -> Dict[str, np.number]:
 
     state_file = f"{model_path}/trainer_state.json"
     if os.path.exists(state_file):
-        _, _, idx = split_parts(model_name, args.split_char)
+        _, _, idx = split_parts(model_name)
         with open(state_file, "r") as f:
             data = json.load(f)
         log = data["log_history"]
@@ -286,7 +287,7 @@ def get_classifier_weights(model_name: str, args: Namespace) -> Optional[Tensor]
     if os.path.exists(classifier_file):
         return pt.load(classifier_file, args.device)
 
-    _, _, ckpt_idx = split_parts(model_name, args.split_char)
+    _, _, ckpt_idx = split_parts(model_name)
     ckpt_path = select_ckpt(model_path, ckpt_idx)
     if ckpt_path is None:
         print(f"W: model checkpoint at index {ckpt_idx} not found")

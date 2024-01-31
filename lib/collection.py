@@ -16,6 +16,10 @@ from lib.model import ModelArguments, strip_model
 
 @dataclass
 class CollectArguments:
+    do_collect: bool = field(
+        default=False,
+        metadata={"help": ("Whether to collect statistics.")},
+    )
     batch_size: Optional[int] = field(
         default=1,
         metadata={"help": ("Batch size of collection.")},
@@ -108,9 +112,10 @@ def collect_embeddings(
     makedirs(decs_dir, exist_ok=True)
 
     model_name = model_args.model_name_or_path.split("/")[-1]
-    means_path = f"{means_dir}/{model_name}@{args.model_ckpt_idx}-means.pt"
-    vars_path = f"{vars_dir}/{model_name}@{args.model_ckpt_idx}-vars.pt"
-    decs_path = f"{decs_dir}/{model_name}@{args.model_ckpt_idx}-decs.pt"
+    short_name = model_name.replace("TinyStories-", "TS")
+    means_path = f"{means_dir}/{short_name}@{args.model_ckpt_idx}-means.pt"
+    vars_path = f"{vars_dir}/{short_name}@{args.model_ckpt_idx}-vars.pt"
+    decs_path = f"{decs_dir}/{short_name}@{args.model_ckpt_idx}-decs.pt"
 
     N_seqs = len(data)
     extract = lambda i: pt.tensor(data[i]["input_ids"], dtype=pt.int32)

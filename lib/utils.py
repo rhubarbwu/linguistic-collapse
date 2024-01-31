@@ -54,7 +54,7 @@ def clean_up(*garbage: List[Any]):
         pt.cuda.empty_cache()
 
 
-CRUFT = ["TS", ".pt", "means-", "vars-", "-means", "-vars", "-decs"]
+CRUFT = ["TS", "TinyStories-", ".pt", "means-", "vars-", "-means", "-vars", "-decs"]
 
 
 def identify(path: str) -> str:
@@ -112,7 +112,7 @@ def log_kernel(matrix: Tensor, device: str = "cpu"):
     normed = normalize(matrix)
     kernel_grid = pt.zeros((N, N), device=device)
     for idx in tqdm(range(N), ncols=79, desc="log kernel"):
-        diff_norms = (normed[idx] - normed).norm(dim=-1) # normalize first
+        diff_norms = (normed[idx] - normed).norm(dim=-1)  # normalize first
         kernel_grid[idx] = (diff_norms ** (-1)).log()
 
     return kernel_grid

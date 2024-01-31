@@ -5,8 +5,6 @@ import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from torch import Tensor
 
-from lib.statistics import collect_hist
-
 TOO_BIG = 12288
 
 
