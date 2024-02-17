@@ -253,13 +253,13 @@ class Statistics:
 
         return interference  # C' x C'
 
-    def geodesic_distances(
+    def kernel_distances(
         self, idxs: List[int] = None, kernel: callable = log_kernel
     ) -> Tensor:
-        """Compute geodesic distances towards to measure convergence to
+        """Compute kernel distances towards to measure convergence to
         hyperspherical uniformity (GNC2, https://arxiv.org/abs/2303.06484).
         idxs: classes to select for subsampled computation.
-        kernel: how to compute geodesic distance between points.
+        kernel: how to compute kernel distance between points.
         """
         means, _ = self.compute_means(idxs)
         dists = kernel(means)  # C' x C'

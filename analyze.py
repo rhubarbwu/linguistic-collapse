@@ -40,7 +40,7 @@ parser.add_argument("-loss", "--model_stats", action="store_true")
 parser.add_argument("-snr", "-cdnv", "--inv_snr", action="store_true")  # NC1 (Galanti)
 parser.add_argument("-nor", "--norms", action="store_true")  # (G)NC2
 parser.add_argument("-etf", "--interfere", action="store_true")  # NC2
-parser.add_argument("-geo", "--geodesic", type=str, default=None)  # GNC2
+parser.add_argument("-kern", "--kernel", type=str, default=None)  # GNC2
 parser.add_argument("-dual", "--duality", action="store_true")  # NC3
 parser.add_argument("-decs", "--decisions", action="store_true")  # NC4
 parser.add_argument("-each", "--each_model", action="store_true")
@@ -62,7 +62,7 @@ if "cuda" in args.device and not pt.cuda.is_available():
 
 ANALYSIS = args.model_stats
 ANALYSIS |= args.inv_snr | args.duality | args.decisions  # NC1,3,4
-ANALYSIS |= args.norms | args.interfere | (args.geodesic is not None)  # (G)NC2
+ANALYSIS |= args.norms | args.interfere | (args.kernel is not None)  # (G)NC2
 
 
 PATHS = {}
@@ -176,9 +176,9 @@ for iden in IDENTIFIERS:
         commit(f"{args.output_file}", "counts", counts)
 
     if args.model_stats:
-        train_stats = get_model_stats(f"TS{iden}", args)
+        train_stats = get_model_stats(f"TinyStories-{iden}", args)
         for stat_key in train_stats.keys():
-            commit(args.output_file, stat_key, train_stats[stat_key], iden)
+            update_df(df, stat_key, train_stats[stat_key], iden)
 
     if args.inv_snr:  # NC1
         CDNVs = collected.compute_vars(indices)
@@ -227,10 +227,10 @@ for iden in IDENTIFIERS:
         triu_stats_histogram(interfere, "interfere")
         del interfere
 
-    if args.geodesic:  # GNC2
-        kernel = riesz_kernel if "riesz" in args.geodesic else log_kernel
-        distances = collected.geodesic_distances(indices, kernel)
-        triu_stats_histogram(distances, f"{args.geodesic}_dist")
+    if args.kernel:  # GNC2
+        kernel = riesz_kernel if "riesz" in args.kernel else log_kernel
+        distances = collected.kernel_distances(indices, kernel)
+        triu_stats_histogram(distances, f"{args.kernel}_dist")
         del distances
 
     if args.duality:  # NC3
@@ -263,8 +263,12 @@ for iden in IDENTIFIERS:
 
     if args.decisions:  # NC4
         matches, misses = collected.matches[indices], collected.misses[indices]
-        update_df(df, "matches", matches.sum(), iden)
-        update_df(df, "misses", misses.sum(), iden)
+        update_df(df, "misses", int(misses.sum()), iden)
+        update_df(df, "matches", int(matches.sum()), iden)
+
+        matches = matches.to(pt.float32)
+        update_df(df, "matches_mean", matches.mean(), iden)
+        update_df(df, "matches_std", matches.std(), iden)
 
     if args.force:
         df.to_csv(f"{args.output_file}.csv")

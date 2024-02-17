@@ -107,8 +107,10 @@ def create_df(path: str) -> pd.DataFrame:
 
 
 def update_df(df: pd.DataFrame, metric: str, new_val: Any, entry: Optional[str] = None):
-    if entry and len(new_val.shape) == 0:
-        new_val = new_val.item()
+    if entry:
+        if type(new_val) ==Tensor:
+            assert len(new_val.shape) == 0
+            new_val = new_val.item()
         if metric not in df:
             df[metric] = pd.Series(dtype=type(new_val))
         df.at[entry, metric] = new_val
