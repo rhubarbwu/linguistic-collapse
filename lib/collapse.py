@@ -10,9 +10,6 @@ from lib.statistics import collect_hist, triu_mean, triu_std
 from lib.utils import inner_product, log_kernel, normalize, select_int_type
 from lib.visualization import plot_histogram
 
-means_path = lambda name: f"means/{name}-means.pt"
-vars_path = lambda name: f"vars/{name}-vars.pt"
-
 
 class Statistics:
     def __init__(

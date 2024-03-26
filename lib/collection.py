@@ -29,7 +29,7 @@ class CollectArguments:
         metadata={"help": ("Device to run the collection on.")},
     )
     model_ckpt_idx: Optional[int] = field(
-        default=9,
+        default=None,
         metadata={"help": ("Which checkpoint (by list index) to load for the model.")},
     )
     save_every: Optional[int] = field(

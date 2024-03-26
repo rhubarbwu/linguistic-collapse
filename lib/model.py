@@ -200,7 +200,7 @@ def get_model(
 ) -> AutoCLM:
     if args.model_name_or_path:
         path = args.model_name_or_path
-        if model_ckpt_idx:
+        if model_ckpt_idx != None:
             path = select_ckpt(path, model_ckpt_idx)
 
         torch_dtype = (
@@ -251,21 +251,21 @@ def strip_model(
 
 def get_model_stats(model_name: str, args: Namespace) -> Dict[str, np.number]:
     model_path, ckpt_idx = f"{args.model_cache}/{model_name}".split("@")
-    train_stats, trained_prop = {}, None
+    model_stats, trained_prop = {}, None
 
     config_file = f"{model_path}/config.json"
     if os.path.exists(config_file):
         config = AutoConfig.from_pretrained(config_file)
         model = AutoCLM.from_config(config)
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
-        train_stats["n_params"] = n_params
+        model_stats["n_params"] = n_params
 
     results_file = f"{model_path}/train_results.json"
     if os.path.exists(results_file):
         with open(results_file, "r") as f:
             data = json.load(f)
         trained_prop = (int(ckpt_idx) + 1) / data["epoch"]
-        train_stats["train_time"] = np.float64(data["train_runtime"] * trained_prop)
+        model_stats["train_time"] = np.float64(data["train_runtime"] * trained_prop)
 
     state_file = f"{model_path}/trainer_state.json"
     if os.path.exists(state_file):
@@ -274,11 +274,20 @@ def get_model_stats(model_name: str, args: Namespace) -> Dict[str, np.number]:
             data = json.load(f)
         log = data["log_history"]
         epoch_losses = [step["loss"] for step in log if idx <= step["epoch"] < idx + 1]
-        train_stats["train_loss"] = np.mean(epoch_losses).astype(np.float64)
+        model_stats["train_loss"] = np.mean(epoch_losses).astype(np.float64)
         if trained_prop is not None:
-            train_stats["train_flops"] = np.int64(data["total_flos"] * trained_prop)
+            model_stats["train_flops"] = np.int64(data["total_flos"] * trained_prop)
 
-    return train_stats
+    eval_file = f"{model_path}/eval_results.json"
+    if os.path.exists(eval_file):
+        with open(eval_file, "r") as f:
+            data = json.load(f)
+
+        model_stats["eval_acc"] = data["eval_accuracy"]
+        model_stats["eval_loss"] = data["eval_loss"]
+        model_stats["perplex"] = data["perplexity"]
+
+    return model_stats
 
 
 def get_classifier_weights(model_name: str, args: Namespace) -> Optional[Tensor]:

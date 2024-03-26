@@ -151,7 +151,7 @@ def main():
 
     config = get_config(model_args, logger)
     tokenizer = get_tokenizer(model_args)
-    model = get_model(model_args, config, logger, (coll_args.model_ckpt_idx))
+    model = get_model(model_args, config, logger, coll_args.model_ckpt_idx)
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
@@ -297,6 +297,9 @@ def main():
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
+
+    pt.set_grad_enabled(False)
+    
 
     # Evaluation
     if train_args.do_eval:
