@@ -116,8 +116,7 @@ class Statistics:
         assert X.shape[-1] == self.D
         assert X.shape[0] == Y.shape[0]
 
-        idxs = self.counts_in_range()
-        means, _ = self.compute_means(idxs)
+        means, _ = self.compute_means()  # C x D
 
         if self.N2 + Y.shape[0] > self.N1:
             print("  W: this batch would exceed means samples")
@@ -141,8 +140,9 @@ class Statistics:
         W (C x D): model classifier weights
         """
 
-        idxs = self.counts_in_range()
-        means, _ = self.compute_means(idxs)  # C x D
+        means, _ = self.compute_means()  # C x D
+        idxs = self.counts_in_range(1)
+        means, W = means[idxs], W[idxs]
 
         if self.N3 + Y.shape[0] > self.N1:
             print("  W: this batch would exceed means samples")
@@ -385,7 +385,11 @@ class Statistics:
             return 0
 
         data = pt.load(file, self.device)
-        assert data["hash"] == self.hash, "vars based on outdated means"
+        assert self.hash in [
+            None,
+            data["hash"],
+        ], f"vars based on outdated means: {self.hash[:6]} != {data['hash'][:6]}"
+        self.hash = data["hash"]
 
         self.C, self.D = data["C"], data["D"]
         self.N2 = data["N"]
@@ -424,7 +428,11 @@ class Statistics:
             return 0
 
         data = pt.load(file, self.device)
-        assert data["hash"] == self.hash, "decs based on outdated means"
+        assert self.hash in [
+            None,
+            data["hash"],
+        ], f"decs based on outdated means: {self.hash[:6]} != {data['hash'][:6]}"
+        self.hash = data["hash"]
 
         self.C, self.D = data["C"], data["D"]
         self.N3 = data["N"]

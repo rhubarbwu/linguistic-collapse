@@ -3,6 +3,7 @@ datasets
 evaluate
 h5py
 optimum
+sklearn
 torch
 tqdm
 transformers @ git+https://github.com/huggingface/transformers

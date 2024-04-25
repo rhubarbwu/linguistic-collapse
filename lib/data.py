@@ -140,6 +140,8 @@ def get_data_as_chunks(
     if args.data_dir is not None and exists(args.data_dir):
         raw_datasets = load_from_disk(args.data_dir)
     elif args.dataset_name is not None:
+        raw_datasets = load_dataset("roneneldan/TinyStories")
+    elif args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         raw_datasets = load_dataset(
             args.dataset_name,

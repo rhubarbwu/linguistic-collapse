@@ -282,9 +282,8 @@ def get_model_stats(model_name: str, args: Namespace) -> Dict[str, np.number]:
     if os.path.exists(eval_file):
         with open(eval_file, "r") as f:
             data = json.load(f)
-
-        model_stats["eval_acc"] = data["eval_accuracy"]
-        model_stats["eval_loss"] = data["eval_loss"]
+        model_stats["val_acc"] = data["eval_accuracy"]
+        model_stats["val_loss"] = data["eval_loss"]
         model_stats["perplex"] = data["perplexity"]
 
     return model_stats
