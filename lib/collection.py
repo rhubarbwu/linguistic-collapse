@@ -4,7 +4,7 @@ from os import makedirs
 from typing import List, Optional, Tuple, Union
 
 import torch as pt
-from datasets import Dataset
+from datasets import DatasetDict
 from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
@@ -98,7 +98,7 @@ def collect_embeddings(
     args: CollectArguments,
     model_args: ModelArguments,
     model: AutoModelForCausalLM,
-    data: Dataset,
+    datasets: DatasetDict,
 ):
     pt.set_grad_enabled(False)
 
@@ -117,6 +117,7 @@ def collect_embeddings(
     vars_path = f"{vars_dir}/{short_name}@{args.model_ckpt_idx}-vars.pt"
     decs_path = f"{decs_dir}/{short_name}@{args.model_ckpt_idx}-decs.pt"
 
+    data = datasets["validation" if args.stage == "decs" else "train"]
     N_seqs = len(data)
     extract = lambda i: pt.tensor(data[i]["input_ids"], dtype=pt.int32)
     N_batches = int(math.ceil(N_seqs / args.batch_size))

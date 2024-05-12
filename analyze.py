@@ -103,7 +103,7 @@ for iden in PATHS:
     collected: Statistics = get_stats(iden)
     Ns = (collected.N1, collected.N2, collected.N3)
     Ns_seqs = (collected.N1_seqs, collected.N2_seqs, collected.N3_seqs)
-    if not (Ns[0] == Ns[1] == Ns[2] == args.totals[0]):
+    if not (Ns[0] == Ns[1] == args.totals[0]):
         INCOMPLETE.append(iden)
 
     if args.progress:

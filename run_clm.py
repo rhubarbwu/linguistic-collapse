@@ -135,9 +135,10 @@ def main():
     # Set seed before initializing model.
     set_seed(train_args.seed)
 
-    from lib.data import get_data_as_chunks
+    from lib.model import get_config, get_model, get_tokenizer
 
-    raw_datasets = get_data_as_chunks(data_args, model_args.cache_dir, model_args.token)
+    config = get_config(model_args, logger)
+    model = get_model(model_args, config, logger, coll_args.model_ckpt_idx)
 
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
@@ -147,21 +148,17 @@ def main():
     # The .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
 
-    from lib.model import get_config, get_model, get_tokenizer
+    from lib.data import get_data_as_chunks, tokenize_dataset
 
-    config = get_config(model_args, logger)
+    raw_datasets = get_data_as_chunks(data_args, model_args.cache_dir, model_args.token)
     tokenizer = get_tokenizer(model_args)
-    model = get_model(model_args, config, logger, coll_args.model_ckpt_idx)
+    tokenized_data = tokenize_dataset(train_args, data_args, tokenizer, raw_datasets)
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
     embedding_size = model.get_input_embeddings().weight.shape[0]
     if len(tokenizer) > embedding_size:
         model.resize_token_embeddings(len(tokenizer))
-
-    from lib.data import tokenize_dataset
-
-    tokenized_data = tokenize_dataset(train_args, data_args, tokenizer, raw_datasets)
 
     if data_args.block_size is None:
         block_size = tokenizer.model_max_length
@@ -252,7 +249,7 @@ def main():
 
     if model_args.model_name_or_path and coll_args.do_collect:
         pt.set_grad_enabled(False)
-        collect_embeddings(coll_args, model_args, model, lm_datasets["train"])
+        collect_embeddings(coll_args, model_args, model, lm_datasets)
 
     # Initialize our Trainer
     trainer = Trainer(
@@ -299,7 +296,6 @@ def main():
         trainer.save_state()
 
     pt.set_grad_enabled(False)
-    
 
     # Evaluation
     if train_args.do_eval:
