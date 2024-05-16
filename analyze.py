@@ -3,6 +3,7 @@ from os.path import exists, isfile
 
 import torch as pt
 from pandas import DataFrame
+from tqdm import tqdm
 
 from lib.collapse import Statistics
 from lib.model import get_classifier_weights, get_model_stats, split_parts
@@ -70,13 +71,18 @@ for file in sorted(args.input_files, key=lambda x: x.split("/")[-1]):
     if not exists(file) or not isfile(file):
         continue
     iden = identify(file)
-    if iden not in PATHS:
-        PATHS[iden] = (None, None, None)
+    paths = [None, None, None] if iden not in PATHS else PATHS[iden]
 
-    means_path = file if "means" in file else PATHS[iden][0]
-    vars_path = file if "vars" in file else PATHS[iden][1]
-    decs_path = file if "decs" in file else PATHS[iden][2]
-    PATHS[iden] = (means_path, vars_path, decs_path)
+    if "means" in file:
+        paths[0] = file
+    elif "vars" in file:
+        paths[1] = file
+    elif "decs" in file:
+        paths[2] = file
+    else:
+        continue
+
+    PATHS[iden] = paths
     if args.single and None not in PATHS[iden]:
         PATHS = {iden: PATHS[iden]}
         break
@@ -99,7 +105,7 @@ if args.progress:
 INCOMPLETE = []
 
 
-for iden in PATHS:
+for iden in tqdm(PATHS):
     collected: Statistics = get_stats(iden)
     Ns = (collected.N1, collected.N2, collected.N3)
     Ns_seqs = (collected.N1_seqs, collected.N2_seqs, collected.N3_seqs)
@@ -161,7 +167,7 @@ def triu_stats_histogram(data: pt.Tensor, key: str):
         del bins, edges
 
 
-for iden in IDENTIFIERS:
+for iden in tqdm(IDENTIFIERS):
     if iden not in PATHS:
         print("SKIPPING", iden)
         continue

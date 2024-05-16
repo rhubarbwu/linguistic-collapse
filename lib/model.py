@@ -258,27 +258,34 @@ def get_model_stats(model_name: str, args: Namespace) -> Dict[str, np.number]:
         config = AutoConfig.from_pretrained(config_file)
         model = AutoCLM.from_config(config)
         n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
-        model_stats["n_params"] = n_params
+        model_stats["n_params"] = int(n_params)
 
-    results_file = f"{model_path}/train_results.json"
-    if os.path.exists(results_file):
-        with open(results_file, "r") as f:
-            data = json.load(f)
-        trained_prop = (int(ckpt_idx) + 1) / data["epoch"]
-        model_stats["train_time"] = np.float64(data["train_runtime"] * trained_prop)
+    # results_file = f"{model_path}/train_results.json"
+    # if os.path.exists(results_file):
+    #     with open(results_file, "r") as f:
+    #         data = json.load(f)
+    #     trained_prop = (int(ckpt_idx) + 1) / data["epoch"]
+    #     model_stats["train_time"] = np.float64(data["train_runtime"] * trained_prop)
 
-    state_file = f"{model_path}/trainer_state.json"
-    if os.path.exists(state_file):
-        _, _, idx = split_parts(model_name)
-        with open(state_file, "r") as f:
-            data = json.load(f)
-        log = data["log_history"]
-        epoch_losses = [step["loss"] for step in log if idx <= step["epoch"] < idx + 1]
-        model_stats["train_loss"] = np.mean(epoch_losses).astype(np.float64)
-        if trained_prop is not None:
-            model_stats["train_flops"] = np.int64(data["total_flos"] * trained_prop)
+    # state_file = f"{model_path}/trainer_state.json"
+    # if os.path.exists(state_file):
+    #     _, _, idx = split_parts(model_name)
+    #     with open(state_file, "r") as f:
+    #         data = json.load(f)
+    #     log = data["log_history"]
+    #     epoch_losses = [step["loss"] for step in log if idx <= step["epoch"] < idx + 1]
+    #     model_stats["train_loss"] = np.mean(epoch_losses).astype(np.float64)
+    #     if trained_prop is not None:
+    #         model_stats["train_flops"] = np.int64(data["total_flos"] * trained_prop)
 
-    eval_file = f"{model_path}/eval_results.json"
+    model_path = f"{args.model_cache}/{model_name}".split("@")[0]
+    _, _, ckpt_idx = split_parts(model_name)
+    ckpt_path = select_ckpt(model_path, ckpt_idx)
+    if ckpt_path is None:
+        print(f"W: model checkpoint at index {ckpt_idx} not found")
+        return None
+
+    eval_file = f"{ckpt_path}/eval_results.json"
     if os.path.exists(eval_file):
         with open(eval_file, "r") as f:
             data = json.load(f)
@@ -291,10 +298,6 @@ def get_model_stats(model_name: str, args: Namespace) -> Dict[str, np.number]:
 
 def get_classifier_weights(model_name: str, args: Namespace) -> Optional[Tensor]:
     model_path = f"{args.model_cache}/{model_name}".split("@")[0]
-    classifier_file = f"{model_path}/cls.pt"
-    if os.path.exists(classifier_file):
-        return pt.load(classifier_file, args.device)
-
     _, _, ckpt_idx = split_parts(model_name)
     ckpt_path = select_ckpt(model_path, ckpt_idx)
     if ckpt_path is None:
@@ -307,11 +310,5 @@ def get_classifier_weights(model_name: str, args: Namespace) -> Optional[Tensor]
     )
     W = list(model.lm_head.parameters())[0]
     del model
-
-    print(
-        f"caching weights for {ckpt_path} in {classifier_file}",
-        flush=True,
-    )
-    pt.save(W.detach(), classifier_file)
 
     return W.to(args.device)
