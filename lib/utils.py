@@ -1,5 +1,5 @@
 import gc
-from math import copysign
+from math import copysign, isnan
 from os.path import isfile
 from typing import Any, List, Set, Tuple
 
@@ -29,6 +29,14 @@ def select_int_type(value: int = 0) -> pt.dtype:
             return dtype
 
     raise ValueError(f"{value} too big")
+
+
+def is_float(value):
+    try:
+        float(value)
+        return not isnan(value)
+    except ValueError:
+        return False
 
 
 MAGS = ["q", "t", "b", "m", "k"]
@@ -107,43 +115,78 @@ def extract_parts(string: str, delims: Set[str]):
     return parts
 
 
-def log_kernel(matrix: Tensor, device: str = "cpu"):
-    N = len(matrix)
-    normed = normalize(matrix)
-    kernel_grid = pt.zeros((N, N), device=device)
-    for idx in tqdm(range(N), ncols=79, desc="log kernel"):
-        diff_norms = (normed[idx] - normed).norm(dim=-1)  # normalize first
-        kernel_grid[idx] = (diff_norms ** (-1)).log()
-
-    return kernel_grid
-
-
-def riesz_kernel(matrix: Tensor, device: str = "cpu"):
-    N, S = len(matrix), matrix.shape[-1] - 2
-    normed = normalize(matrix)
-    kernel_grid = pt.zeros((N, N), device=device)
-    for idx in tqdm(range(N), ncols=79, desc="riesz kernel"):
-        diff_norms = (normed[idx] - normed).norm(dim=-1)
-        kernel_grid[idx] = copysign(1, S) * diff_norms ** (-S)
-
-    return kernel_grid
-
-
-def inner_product(
-    data: Tensor, patch_size: int = None, desc: str = "inner prod"
+def patching(
+    data: Tensor,
+    kernel: callable,
+    patch_size: int = 1,
+    tqdm_desc: str = None,
 ) -> Tensor:
+    N = len(data)
+    outgrid = pt.zeros((N, N), device=data.device)
+    n_patches = (N + patch_size - 1) // patch_size
+
+    for i in tqdm(range(n_patches), ncols=79, desc=tqdm_desc):
+        i0, i1 = i * patch_size, min((i + 1) * patch_size, N)
+        patch_i = data[i0:i1]
+        for j in range(n_patches):
+            j0, j1 = j * patch_size, min((j + 1) * patch_size, N)
+            patch_j = data[j0:j1]
+            outgrid[i0:i1, j0:j1] = kernel(patch_i, patch_j)
+
+    return outgrid
+
+
+def inner_product(data: Tensor, patch_size: int = None) -> Tensor:
     if not patch_size:
         return pt.inner(data, data)
 
-    n_rows = data.shape[0]
-    n_patches = (n_rows + patch_size - 1) // patch_size
+    kernel_grid = patching(data, pt.inner, patch_size, "inner prod")
+    return kernel_grid
 
-    inner_prods = pt.zeros(n_rows, n_rows, device=data.device)
-    for i in tqdm(range(n_patches), ncols=79, desc=desc):
-        i0, i1 = i * patch_size, min((i + 1) * patch_size, n_rows)
-        patch_i = data[i0:i1]
-        for j in range(n_patches):
-            j0, j1 = j * patch_size, min((j + 1) * patch_size, n_rows)
-            patch_j = data[j0:j1]
-            inner_prods[i0:i1, j0:j1] = pt.inner(patch_i, patch_j)
-    return inner_prods
+
+def log_kernel(data: Tensor, patch_size: int = 1) -> Tensor:
+    normed = normalize(data)
+
+    def kernel(patch_i, patch_j):
+        diff = patch_i.unsqueeze(1) - patch_j
+        diff_norms = diff.norm(dim=-1)
+        return (diff_norms ** (-1)).log()
+
+    kernel_grid = patching(normed, kernel, patch_size, "log kernel")
+
+    return kernel_grid
+
+
+def riesz_kernel(data: Tensor, patch_size: int = 1) -> Tensor:
+    S = data.shape[-1] - 2
+    normed = normalize(data)
+
+    def kernel(patch_i, patch_j):
+        diff = patch_i.unsqueeze(1) - patch_j
+        diff_norms = diff.norm(dim=-1)
+        return copysign(1, S) * diff_norms ** (-S)
+
+    kernel_grid = patching(normed, kernel, patch_size, "riesz kernel")
+
+    return kernel_grid
+
+
+def class_dist_norm_var(
+    means: Tensor, vars_normed: Tensor, patch_size: int = 1
+) -> Tensor:
+    vars_normed = vars_normed.view(-1, 1)
+    bundled = pt.cat((means, vars_normed), dim=1)
+
+    def kernel(patch_i, patch_j):
+        vars_i, vars_j = patch_i[:, -1], patch_j[:, -1]
+        var_avgs = (vars_i.unsqueeze(1) + vars_j).squeeze() / 2
+
+        means_i, means_j = patch_i[:, :-1], patch_j[:, :-1]
+
+        means_diff = means_i.unsqueeze(1) - means_j
+        inner = pt.sum(means_diff * means_diff, dim=-1)
+        return var_avgs.squeeze(0) / inner / inner
+
+    kernel_grid = patching(bundled, kernel, patch_size, "cdnvs")
+
+    return kernel_grid

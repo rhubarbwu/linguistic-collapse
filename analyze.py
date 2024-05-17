@@ -9,7 +9,7 @@ from lib.collapse import Statistics
 from lib.model import get_classifier_weights, get_model_stats, split_parts
 from lib.statistics import (collect_hist, commit, create_df, triu_mean,
                             triu_std, update_df)
-from lib.utils import identify, log_kernel, riesz_kernel
+from lib.utils import identify, is_float, log_kernel, riesz_kernel
 
 pt.set_grad_enabled(False)
 
@@ -151,6 +151,9 @@ if args.single:  # run the first one for debugging purposes
 
 
 df: DataFrame = create_df(args.output_file)
+missing = lambda k, i: not (k in df and i in df.index and is_float(df[k][i]))
+if args.force:
+    missing = lambda k, i: True
 
 
 def triu_stats_histogram(data: pt.Tensor, key: str):
@@ -186,8 +189,8 @@ for iden in tqdm(IDENTIFIERS):
         for stat_key in train_stats.keys():
             update_df(df, stat_key, train_stats[stat_key], iden)
 
-    if args.inv_snr:  # NC1
-        CDNVs = collected.compute_vars(indices)
+    if args.inv_snr and missing("cdnv_std", iden):  # NC1
+        CDNVs = collected.compute_vars(indices, args.patch_size)
         if CDNVs is not None and collected.N2 == args.totals[0]:
             mean = triu_mean(CDNVs)
             std = triu_std(CDNVs, mean)
@@ -202,7 +205,7 @@ for iden in tqdm(IDENTIFIERS):
 
             del CDNVs
 
-    if args.norms:  # NC2
+    if args.norms and missing("norms_logscl_std", iden):  # NC2 equinorm
         norms = collected.mean_norms(indices, False, False)
         update_df(df, "norms_mean", norms.mean(), iden)
         update_df(df, "norms_std", norms.std(), iden)
@@ -228,18 +231,18 @@ for iden in tqdm(IDENTIFIERS):
             del bins, edges
         del norms
 
-    if args.interfere:  # NC2
+    if args.interfere and missing("interfere_std", iden):  # NC2 simplex ETF
         interfere = collected.interference(indices, args.patch_size)
         triu_stats_histogram(interfere, "interfere")
         del interfere
 
-    if args.kernel:  # GNC2
+    if args.kernel and missing(f"{args.kernel}_dist_std", iden):  # GNC2
         kernel = riesz_kernel if "riesz" in args.kernel else log_kernel
-        distances = collected.kernel_distances(indices, kernel)
+        distances = collected.kernel_distances(indices, kernel, args.patch_size)
         triu_stats_histogram(distances, f"{args.kernel}_dist")
         del distances
 
-    if args.duality:  # NC3
+    if args.duality and missing("sims_std", iden):  # NC3 duality
         W = get_classifier_weights(f"TinyStories-{iden}", args)
 
         if W is None:
@@ -267,7 +270,7 @@ for iden in tqdm(IDENTIFIERS):
 
             del W
 
-    if args.decisions:  # NC4
+    if args.decisions and missing("matches_std", iden):  # NC4 agreement
         matches, misses = collected.matches[indices], collected.misses[indices]
         update_df(df, "misses", int(misses.sum()), iden)
         update_df(df, "matches", int(matches.sum()), iden)
@@ -276,9 +279,7 @@ for iden in tqdm(IDENTIFIERS):
         update_df(df, "matches_mean", matches.mean(), iden)
         update_df(df, "matches_std", matches.std(), iden)
 
-    if args.force:
-        df.to_csv(f"{args.output_file}.csv")
-
+    df.to_csv(f"{args.output_file}.csv")
     del collected
 
 

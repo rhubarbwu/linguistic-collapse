@@ -7,7 +7,8 @@ from torch import Tensor
 from tqdm import tqdm
 
 from lib.statistics import collect_hist, triu_mean, triu_std
-from lib.utils import inner_product, log_kernel, normalize, select_int_type
+from lib.utils import (class_dist_norm_var, inner_product, log_kernel,
+                       normalize, select_int_type)
 from lib.visualization import plot_histogram
 
 
@@ -195,7 +196,11 @@ class Statistics:
 
         return mean, mean_G
 
-    def compute_vars(self, idxs: List[int] = None) -> Tensor:
+    def compute_vars(
+        self,
+        idxs: List[int] = None,
+        patch_size: int = 1,
+    ) -> Tensor:
         """Compute the overall covariances of the dataset.
         idxs: classes to select for subsampled computation.
         """
@@ -203,19 +208,17 @@ class Statistics:
         if self.N1 != self.N2 or self.N1_seqs != self.N2_seqs:
             return None
 
+        means, _ = self.compute_means(idxs)
         counts, var_sums = self.counts, self.var_sums
         if idxs is not None:
             counts, var_sums = counts[idxs], var_sums[idxs]
-        C = len(counts)
         vars_normed = var_sums / counts
 
-        means, _ = self.compute_means(idxs)
-        CDNVs = pt.zeros(C, C, dtype=self.dtype, device=self.device)
-        for c in tqdm(range(C), ncols=79, desc="cdnvs"):
-            var_avgs = (vars_normed[c] + vars_normed).squeeze() / 2
-            means_diff = means[c] - means
-            inner = pt.sum(means_diff * means_diff, dim=-1)
-            CDNVs[c] = var_avgs.squeeze(0) / inner / inner
+        CDNVs = class_dist_norm_var(
+            means,
+            vars_normed,
+            patch_size,
+        )
 
         return CDNVs
 
@@ -246,12 +249,15 @@ class Statistics:
         means, mean_G = self.compute_means(idxs)
         mean_diffs = means - mean_G  # C' x D
 
-        interference = inner_product(normalize(mean_diffs), patch_size, "interfere")
+        interference = inner_product(normalize(mean_diffs), patch_size)
 
         return interference  # C' x C'
 
     def kernel_distances(
-        self, idxs: List[int] = None, kernel: callable = log_kernel
+        self,
+        idxs: List[int] = None,
+        kernel: callable = log_kernel,
+        patch_size: int = 1,
     ) -> Tensor:
         """Compute kernel distances towards to measure convergence to
         hyperspherical uniformity (GNC2, https://arxiv.org/abs/2303.06484).
@@ -259,7 +265,7 @@ class Statistics:
         kernel: how to compute kernel distance between points.
         """
         means, _ = self.compute_means(idxs)
-        dists = kernel(means)  # C' x C'
+        dists = kernel(means, patch_size)  # C' x C'
 
         return dists  # C' x C'
 
