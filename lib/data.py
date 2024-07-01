@@ -221,6 +221,12 @@ def tokenize_dataset(
     tokenizer: AutoTokenizer,
     raw_datasets: Dict[str, Dataset],
 ):
+    """Tokenize the entire dataset.
+    train_args: Training arguments supplied from top-level script.
+    data_args: Dataset arguments supplied from top-level script.
+    tokenizer: Tokenizer model to process tokens.
+    raw_datasets: unprocessed data.
+    """
     # Preprocessing the datasets.
     # First we tokenize all the texts.
     if train_args.do_train:

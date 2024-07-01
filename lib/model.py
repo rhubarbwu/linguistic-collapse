@@ -143,6 +143,7 @@ class ModelArguments:
 
 
 def get_config(args: ModelArguments, logger: Logger) -> AutoConfig:
+    """Construct configuration given model arguments."""
     config_kwargs = {
         "cache_dir": args.cache_dir,
         "revision": args.model_revision,
@@ -164,6 +165,7 @@ def get_config(args: ModelArguments, logger: Logger) -> AutoConfig:
 
 
 def get_tokenizer(args: ModelArguments) -> AutoTokenizer:
+    """Load the appropriate tokenizer for the model."""
     tknzer_args = {
         "cache_dir": args.cache_dir,
         "use_fast": args.use_fast_tokenizer,
@@ -185,6 +187,10 @@ def get_tokenizer(args: ModelArguments) -> AutoTokenizer:
 
 
 def select_ckpt(path: str, idx: int) -> Optional[str]:
+    """Identify the path of the specific checkpoint.
+    path: location of the overall model.
+    idx: index of the checkpoint of interest.
+    """
     dir_files = os.listdir(path)
     ckpt_files = [f for f in dir_files if f.startswith(f"checkpoint-")]
     epoch_paths = sorted(ckpt_files, key=lambda s: int(s.split("-")[1]))
@@ -198,6 +204,12 @@ def get_model(
     logger: Logger = None,
     model_ckpt_idx: int = None,
 ) -> AutoCLM:
+    """Load CausalLM from local path or initialize for training.
+    args: model arguments.
+    config: model configuration.
+    logger: logging object.
+    model_ckpt_idx: index of specific checkpoint to load.
+    """
     if args.model_name_or_path:
         path = args.model_name_or_path
         if model_ckpt_idx != None:
@@ -231,6 +243,7 @@ def get_model(
 
 
 def split_parts(model_iden_or_name: str) -> Tuple[int, int, int]:
+    """Get architectural details from <model_iden_or_name>."""
     iden = identify(model_iden_or_name)
     depth_str, rest_str = iden.split("x")
     width_str, rest_str = rest_str.split("_")
@@ -242,6 +255,10 @@ def split_parts(model_iden_or_name: str) -> Tuple[int, int, int]:
 def strip_model(
     model: AutoCLM, device: str = "cpu"
 ) -> Tuple[int, int, AutoCLM, Tensor]:
+    """Split the model into the embedding layers and the classifier.
+    model: CausalLM.
+    device: CPU/CUDA on which to load the model.
+    """
     C, D = model.lm_head.out_features, model.lm_head.in_features
     W = list(model.lm_head.parameters())[0].detach()
     del model.lm_head
@@ -250,6 +267,10 @@ def strip_model(
 
 
 def get_model_stats(model_name: str, args: Namespace) -> Dict[str, np.number]:
+    """Get model checkpoint data, such as number of parameters or evaluation results.
+    model_name: HF name for CausalLM.
+    args: model arguments (as per Huggingface).
+    """
     model_path, ckpt_idx = f"{args.model_cache}/{model_name}".split("@")
     model_stats, trained_prop = {}, None
 
@@ -297,6 +318,10 @@ def get_model_stats(model_name: str, args: Namespace) -> Dict[str, np.number]:
 
 
 def get_classifier_weights(model_name: str, args: Namespace) -> Optional[Tensor]:
+    """Extract classifier weights from model.
+    model_name: HF name for CausalLM.
+    args: model arguments (as per Huggingface).
+    """
     model_path = f"{args.model_cache}/{model_name}".split("@")[0]
     _, _, ckpt_idx = split_parts(model_name)
     ckpt_path = select_ckpt(model_path, ckpt_idx)

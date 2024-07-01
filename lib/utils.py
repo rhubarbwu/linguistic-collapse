@@ -22,6 +22,7 @@ DTYPES = {
 
 
 def select_int_type(value: int = 0) -> pt.dtype:
+    """Return the smallest integer type to store <value>."""
     if value is None:
         return None
     for dtype in [int8, uint8, int16, int32, int64]:
@@ -31,7 +32,8 @@ def select_int_type(value: int = 0) -> pt.dtype:
     raise ValueError(f"{value} too big")
 
 
-def is_float(value):
+def is_float(value: Any):
+    """Check if <value> is a float."""
     try:
         float(value)
         return not isnan(value)
@@ -44,6 +46,10 @@ MAG_STRS = ["quadrillion", "trillion", "billion", "million", "thousand"]
 
 
 def numerate(size: str, ref: str = "k") -> float:
+    """Convert size notation to numerical integer.
+    size: original size notation (e.g. 5m).
+    ref: benchmark/reference scale.
+    """
     ref_idx = MAGS.index(ref)
     size = size.split("x")[0].lower()
 
@@ -55,6 +61,7 @@ def numerate(size: str, ref: str = "k") -> float:
 
 
 def clean_up(*garbage: List[Any]):
+    """Simple CPU/CUDA <garbage> collection."""
     for g in garbage:
         del g
     gc.collect()
@@ -66,6 +73,7 @@ CRUFT = ["TS", "TinyStories-", ".pt", "means-", "vars-", "-means", "-vars", "-de
 
 
 def identify(path: str) -> str:
+    """Extract model/experiment indentifier from <path>."""
     identifier = path.split("/")[-1]
     cruft_matches = 0
     for cruft in CRUFT:
@@ -76,6 +84,7 @@ def identify(path: str) -> str:
 
 
 def pathify(identifier: str, stats_dir: str) -> Tuple[str, str]:
+    """Construct means and vars file paths within <stats_dir> from <identifier>"""
     means_path = f"{stats_dir}/means-{identifier}.pt"
     if not isfile(means_path):
         means_path = f"{stats_dir}/{identifier}-means.pt"
@@ -95,12 +104,14 @@ def pathify(identifier: str, stats_dir: str) -> Tuple[str, str]:
 
 
 def scrub(string: str, antis: List[str]):
+    """Remove extraneous parts <antis> from <string>."""
     for anti in antis:
         string = string.replace(anti, "")
     return string
 
 
 def extract_parts(string: str, delims: Set[str]):
+    """Split <string> into parts separated by <delims>."""
     if string[0] not in delims:
         delims.add("")
 
@@ -121,6 +132,12 @@ def patching(
     patch_size: int = 1,
     tqdm_desc: str = None,
 ) -> Tensor:
+    """General algorithm to compute pair-wise interactions in patches for GPU efficiency.
+    data: matrix of d-dimension vectors on which to compute similarity.
+    kernel: function that computes pair-wise interactions.
+    patch_size: size of patch to compute (depending on GPU capacity).
+    tqdm_desc: progress bar display text.
+    """
     N = len(data)
     outgrid = pt.zeros((N, N), device=data.device)
     n_patches = (N + patch_size - 1) // patch_size
@@ -137,6 +154,10 @@ def patching(
 
 
 def inner_product(data: Tensor, patch_size: int = None) -> Tensor:
+    """Compute inner product of a matrix's vectors.
+    data: matrix of d-dimension vectors on which to compute similarity.
+    patch_size: size of patch to compute (depending on GPU capacity).
+    """
     if not patch_size:
         return pt.inner(data, data)
 
@@ -145,6 +166,10 @@ def inner_product(data: Tensor, patch_size: int = None) -> Tensor:
 
 
 def log_kernel(data: Tensor, patch_size: int = 1) -> Tensor:
+    """Compute kernel distance with logarithmic kernel.
+    data: matrix of d-dimension vectors on which to compute distances.
+    patch_size: size of patch to compute (depending on GPU capacity).
+    """
     normed = normalize(data)
 
     def kernel(patch_i, patch_j):
@@ -158,6 +183,10 @@ def log_kernel(data: Tensor, patch_size: int = 1) -> Tensor:
 
 
 def riesz_kernel(data: Tensor, patch_size: int = 1) -> Tensor:
+    """Compute kernel distance with Riesz kernel.
+    data: matrix of d-dimension vectors on which to compute distances.
+    patch_size: size of patch to compute (depending on GPU capacity).
+    """
     S = data.shape[-1] - 2
     normed = normalize(data)
 
@@ -174,6 +203,11 @@ def riesz_kernel(data: Tensor, patch_size: int = 1) -> Tensor:
 def class_dist_norm_var(
     means: Tensor, vars_normed: Tensor, patch_size: int = 1
 ) -> Tensor:
+    """Compute normalized variance (CDNV). https://arxiv.org/abs/2112.15121
+    means: class mean embeddings.
+    vars_normed: normalized variances.
+    patch_size: size of patch to compute (depending on GPU capacity).
+    """
     vars_normed = vars_normed.view(-1, 1)
     bundled = pt.cat((means, vars_normed), dim=1)
 

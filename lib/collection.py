@@ -55,6 +55,9 @@ class CollectArguments:
 
 
 def truncate_and_pad(batch: List[Tensor]) -> Tuple[Tensor, Tensor]:
+    """Construct a uniform batch of sequences.
+    batch: list of original sequences.
+    """
     assert len(batch) > 0
     if len(batch) == 1:
         return None, batch[0].unsqueeze(0)
@@ -73,6 +76,11 @@ def process_batch(
     batch: List[Tensor],
     stats_device: Union[str, pt.device] = "cpu",
 ) -> Tuple[Tensor, Tensor]:
+    """Construct a uniform batch of sequences.
+    model: CausalLM to to make token predictions on sequences.
+    batch: list of original sequences.
+    stats_device: which device (cpu/gpu) on which to infer.
+    """
     masks, batch = truncate_and_pad(batch)
     output = model(
         batch.to(model.device),
@@ -100,6 +108,12 @@ def collect_embeddings(
     model: AutoModelForCausalLM,
     datasets: DatasetDict,
 ):
+    """Collection function for any stage (means/vars/decs).
+    args: Collection arguments supplied from top-level script.
+    model_args: Model/training arguments supplied from top-level script.
+    model: CausalLM architecture and weights.
+    datasets: Processed dataset.
+    """
     pt.set_grad_enabled(False)
 
     means_dir = f"{args.stats_dir}/means@{args.model_ckpt_idx}"

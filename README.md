@@ -18,11 +18,11 @@ We used a relatively [standard script from Huggingface](https://github.com/huggi
 
 Here's an example model that we've made public: https://huggingface.co/rhubarbwu/TinyStories-12x1024_10L
 
-### Dispatching train jobs for several architectures:
+### Dispatching train jobs for several architectures
 
 Use [`batch-train.sh`](./batch-train.sh), but note the variables that should be set before and within the `launch()` function declaration.
 
-### Training the same architecture with multiple seeds:
+### Training the same architecture with multiple seeds
 
 Assuming you already set up the [`config.json`](./config.json) for your desired architecture, you can add a simple `bash` loop into [`batch-train.sh`](./batch-train.sh). Here's the loop that we wrote for our experiments, where `$SCRATCH` is a directory in which we store temporary checkpoints.
 
@@ -35,11 +35,11 @@ for SEED in {10..19}; do
 done
 ```
 
-### Architecture.
+### Architecture
 
 We use [GPT-Neo, developed by EleutherAI](https://github.com/EleutherAI/gpt-neo). You could also adapt our setup to [GPT-NeoX](https://github.com/EleutherAI/gpt-neox) or any other causal architecture.
 
-### Bring your own model.
+### Bring your own model
 
 It is also easy to train your own LLMs separately. Just take care to use the exact same train set configuration (in our setup, note the version of TinyStories and the number of preprocessing workers) between training and the collection of means and variances for analysis.
 
@@ -106,12 +106,12 @@ If all goes well, a CSV-formatted dataframe should be generated.
 
 The dataframe could easily be accessed and visualized with some simple matplotlib script, but we are currently sharing our notebooks (based on our own analysis artifacts) to make it easy:
 
-- [The effect of scaling on linguistic collapse](https://colab.research.google.com/drive/1_PVBqYknv4OH9PzIdFOEpybp16DZKzuT?usp=sharing)
-- [Scale-independent effect by multiple seeds](https://colab.research.google.com/drive/1OqZ4JNITFuZt7jT3-_Q3hr8x2Q_Lvvwa?usp=sharing)
+- [The effect of scaling on linguistic collapse.](https://colab.research.google.com/drive/1_PVBqYknv4OH9PzIdFOEpybp16DZKzuT?usp=sharing)
+- [Scale-independent relationship with generalization across multiple seeds.](https://colab.research.google.com/drive/1OqZ4JNITFuZt7jT3-_Q3hr8x2Q_Lvvwa?usp=sharing)
 
 ## Corrections/Questions
 
-If there are any bugs or inefficiences in our code, or any other questions, we'd be happy to take a look. We prefer that you open an issue on this repository, but the corresponding author can be reached at [`rupert@cs.toronto.edu`](mailto:rupert@cs.toronto.edu).
+If there are any bugs or inefficiences in our code, or any other questions, we'd be happy to take a look. We prefer that you open an issue on this repository, but the corresponding author can be reached at [`rupert@cs.toronto.edu`](mailto:rupert@cs.toronto.edu). We also review [pull requests](https://github.com/rhubarbwu/linguistic-collapse/pulls).
 
 ## Citing
 

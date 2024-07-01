@@ -9,7 +9,6 @@ from tqdm import tqdm
 from lib.statistics import collect_hist, triu_mean, triu_std
 from lib.utils import (class_dist_norm_var, inner_product, log_kernel,
                        normalize, select_int_type)
-from lib.visualization import plot_histogram
 
 
 class Statistics:
@@ -293,9 +292,9 @@ class Statistics:
     ) -> Tensor:
         """Compute dot-product similarities between means and classifier.
         The average of this matrix is linearly related to self-duality (NC3).
-        weights (C x D): weights of the linear classifier
+        weights (C x D): weights of the linear classifier.
         idxs: classes to select for subsampled computation.
-        dims: dimensions on which to project the weights and mean norms
+        dims: dimensions on which to project the weights and mean norms.
         """
         means, mean_G = self.compute_means(idxs)
         means_normed = normalize(means - mean_G).to(self.device)  # C x D
@@ -314,6 +313,11 @@ class Statistics:
         idxs: List[int] = None,
         dims: Tuple[int] = None,
     ):
+        """Project means and classifiers to selected dimensions.
+        weights (C x D): weights of the linear classifier.
+        idxs: classes to select for subsampled computation.
+        dims: dimensions on which to project the weights and mean norms.
+        """
         means, mean_G = self.compute_means(idxs)
         means_normed = normalize(means - mean_G).to(self.device)  # C x D
 
@@ -328,6 +332,10 @@ class Statistics:
     ## SAVING AND LOADING ##
 
     def save_totals(self, file: str, verbose: bool = False) -> str:
+        """Save totals (used with counts for computing means).
+        file: path to save totals data.
+        verbose: logging flag.
+        """
         self.compute_means()
         data = {
             "hash": self.hash,
@@ -346,6 +354,10 @@ class Statistics:
         return file
 
     def load_totals(self, file: str, verbose: bool = True) -> int:
+        """Load totals (used with counts for computing means).
+        file: path to load totals data.
+        verbose: logging flag.
+        """
         if not os.path.isfile(file):
             print(f"  W: file {file} not found; need to collect means from scratch")
             return 0
@@ -365,6 +377,10 @@ class Statistics:
         return self.N1_seqs
 
     def save_var_sums(self, file: str, verbose: bool = False) -> str:
+        """Save variance sums (used with counts for normalized variances).
+        file: path to save variance sums data.
+        verbose: logging flag.
+        """
         data = {
             "hash": self.hash,
             "C": self.C,
@@ -381,6 +397,10 @@ class Statistics:
         return file
 
     def load_var_sums(self, file: str, verbose: bool = True) -> int:
+        """Load variance sums (used with counts for normalized variances).
+        file: path to load variance sums data.
+        verbose: logging flag.
+        """
         means_file = file.replace("vars", "means")
         if not self.load_totals(means_file, False):
             print("  W: means not found; please collect them first")
@@ -407,6 +427,10 @@ class Statistics:
         return self.N2_seqs
 
     def save_decs(self, file: str, verbose: bool = False) -> str:
+        """Save decision matches/misses.
+        file: path to save decision counts.
+        verbose: logging flag.
+        """
         data = {
             "hash": self.hash,
             "C": self.C,
@@ -424,6 +448,10 @@ class Statistics:
         return file
 
     def load_decs(self, file: str, verbose: bool = True) -> int:
+        """Load decision matches/misses.
+        file: path to load decision counts.
+        verbose: logging flag.
+        """
         means_file = file.replace("decs", "means")
         if not self.load_totals(means_file, False):
             print("  W: means not found; please collect them first")
@@ -450,83 +478,3 @@ class Statistics:
             print(f"LOADED decs from {file}; {self.N3} in {self.N3_seqs} seqs")
 
         return self.N3_seqs
-
-
-if __name__ == "__main__":
-    pt.set_grad_enabled(False)
-
-    import os
-    from math import ceil, log
-    from sys import argv
-
-    import matplotlib.pyplot as plt
-
-    means_file, vars_file = "dummy-means.pt", "dummy-vars.pt"
-    if os.path.exists(means_file):
-        os.remove(means_file)
-    if os.path.exists(vars_file):
-        os.remove(vars_file)
-
-    matshow_path, hist_path = "cdnvs_mat.png", "cdnvs_hist.png"
-    if os.path.exists(matshow_path):
-        os.remove(matshow_path)
-    if os.path.exists(hist_path):
-        os.remove(hist_path)
-
-    dtype = pt.float32
-    device = pt.device("cuda" if pt.cuda.is_available() else "cpu")
-
-    C, D, N, B = (2, 3, 12, 4) if len(argv) < 5 else [int(arg) for arg in argv[1:5]]
-    if N % B != 0:
-        N += B - N % B
-        print(f"info: batch_size is {B}, so rounding up to {N}")
-    if N < ceil(-C * log(0.01)):
-        print(f"W: {N} samples may not be enough...")
-
-    Y = pt.randint(C, (N,), dtype=pt.int32)
-    X = (pt.randn(N, D, dtype=dtype) + pt.randn(C, D)[Y, :]).to(device)
-    print(f"created: X {X.shape}, Y {Y.shape}")
-
-    stats = Statistics(C, D, device=device, dtype=dtype)
-    print("collecting means")
-    for i in range(0, N, B):
-        batch, labels = X[i : i + B], Y[i : i + B]
-        stats.collect_means(batch, labels, B)
-
-    stats.save_totals(means_file)
-    stats.load_totals(means_file)
-    W = pt.randn(C, D, dtype=dtype)
-    duality = stats.diff_duality(W)
-    print("self-duality:", duality)
-
-    coh = stats.coherence()
-    hist, edges = collect_hist(coh, triu=True, desc="coh hist")
-    print("coherence:", triu_std(coh).cpu() / triu_mean(coh).cpu())
-
-    ## Variances ##
-
-    print("collecting vars")
-    for i in range(0, N - B, B):
-        batch, labels = X[i : i + B], Y[i : i + B]
-        stats.collect_vars(batch, labels, B)
-    stats.save_var_sums(vars_file)
-    stats.load_var_sums(vars_file)
-    stats.collect_vars(X[-B:], Y[-B:], B)
-
-    # class-distance normalized variances (CDNVS)
-    CDNVs = stats.compute_vars()
-
-    plt.matshow(CDNVs.cpu())
-    plt.colorbar()
-    plt.savefig(matshow_path)
-    plt.close()
-
-    hist, edges = collect_hist(CDNVs, 1024, True)
-    fig, ax = plt.subplots(figsize=(3, 2))
-    plot_histogram(ax, hist, edges, "dummy", "#000000")
-    fig.savefig(hist_path)
-
-    mean = triu_mean(CDNVs)
-    std = triu_std(CDNVs, mean)
-    inv_snr = std.cpu() / mean.cpu()
-    print("inverse SNR:", inv_snr)

@@ -12,6 +12,7 @@ from lib.utils import select_int_type
 
 
 def apply_pca(data: Tensor, K: int = 2) -> Tensor:
+    """Conduct PCA on <data> to <K> dimensions."""
     cov_matrix = pt.mm(data.T, data) / (data.shape[0] - 1)
 
     eig_vals, eig_vecs = la.eig(cov_matrix)
@@ -26,6 +27,7 @@ def apply_pca(data: Tensor, K: int = 2) -> Tensor:
 
 
 def triu_mean(data: Tensor, desc: str = "means") -> pt.float:
+    """Compute the mean of the upper triangle in <data>."""
     N = data.shape[0]
     total = 0
 
@@ -46,6 +48,7 @@ def triu_mean(data: Tensor, desc: str = "means") -> pt.float:
 def triu_std(
     data: Tensor, mean: pt.float = None, correction: bool = True, desc: str = "std"
 ) -> pt.float:
+    """Compute the std of the upper triangle in <data>."""
     debias = 1 if correction else 0
     if mean is None:
         mean = triu_mean(data)
@@ -70,6 +73,12 @@ def triu_std(
 def collect_hist(
     data: Tensor, num_bins: int = 64, triu: bool = False, desc: str = "histogram"
 ) -> Tuple[Tensor, Tensor]:
+    """Compute the histogram of <data>.
+    data: original matrix on which to compute statistics.
+    num_bins: number of bins to collect for histogram.
+    triu: whether to only compute the upper triangle.
+    desc: progress bar text description.
+    """
     N = data.shape[0]
     min_val, max_val = data.min(), data.max()
     val_range = max_val - min_val
@@ -97,6 +106,7 @@ def collect_hist(
 
 
 def create_df(path: str) -> pd.DataFrame:
+    """Create CSV dataframe at <path> if it doesn't exist."""
     path = f"{path}.csv"
     if exists(path):
         df = pd.read_csv(path)
@@ -106,17 +116,28 @@ def create_df(path: str) -> pd.DataFrame:
     return df
 
 
-def update_df(df: pd.DataFrame, metric: str, new_val: Any, entry: Optional[str] = None):
-    if entry:
-        if type(new_val) == Tensor:
-            assert len(new_val.shape) == 0
-            new_val = new_val.item()
-        if metric not in df:
-            df[metric] = pd.Series(dtype=type(new_val))
-        df.at[entry, metric] = new_val
+def update_df(df: pd.DataFrame, metric: str, new_val: Any, entry: str):
+    """Add a cell entry to the CSV dataframe.
+    df: Dataframe.
+    metric: label of measurement.
+    new_val: numerical (or otherwise) value to store.
+    entry: index label.
+    """
+    if type(new_val) == Tensor:
+        assert len(new_val.shape) == 0
+        new_val = new_val.item()
+    if metric not in df:
+        df[metric] = pd.Series(dtype=type(new_val))
+    df.at[entry, metric] = new_val
 
 
 def commit(path: str, metric: str, new_val: Any, entry: Optional[str] = None):
+    """Update a PyTorch archive file.
+    path: location of archive file (*.h5).
+    metric: label of measurement.
+    new_val: numerical (or otherwise) values (usually a Tensor) to store.
+    entry: index label.
+    """
     with File(f"{path}.h5", "a") as file:
         if new_val is not None and entry is not None:
             if metric not in file:
