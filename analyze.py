@@ -29,7 +29,7 @@ parser.add_argument(
     "--totals",
     type=int,
     nargs=3,
-    default=(469514249, 229367, 29233),
+    default=(469514249, 229367, 29233), # TinyStories train set, 2 workers
 )
 
 parser.add_argument("-i", "--input_files", type=str, nargs="+", default=[])

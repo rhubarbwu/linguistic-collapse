@@ -1,0 +1,30 @@
+#!/bin/sh
+
+. ~/.bashrc # define HF_HOME and SCRATCH paths
+. ~/pt/bin/activate
+echo $HOSTNAME
+
+model() {
+    python -m lib.model -mc $SCRATCH $@
+}
+
+collect() {
+    python collect.py -mc $SCRATCH -ds $DATASET_DIR $@
+}
+
+means() {
+    collect -bs $3 -dev cuda:$2 -ms $1
+}
+
+covs() {
+    collect -bs $3 -st covs -dev cuda:$2 -ms $1
+}
+
+analyze() {
+    STATS_DIR=$SCRATCH/stats
+    python analyze.py -mc $SCRATCH/TS -i $STATS_DIR/*/* -dev cuda:0 -o lc $@
+}
+
+progress() {
+    analyze $@ -prog
+}
