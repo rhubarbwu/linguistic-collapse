@@ -4,11 +4,11 @@ Codebase for [arXiv:2405.17767](https://arxiv.org/abs/2405.17767), based on [GPT
 
 ## Environment
 
-Python dependencies can be found in [`requirements.txt`](./requirements.txt). The directory structure we used was placing dataset(s), model checkpoints and analysis artifacts in a single `$SCRATCH` directory with plenty of unused space, while our scripts and CSVs were kept in some home directory as they didn't consume much space.
+Python dependencies can be found in [`requirements.txt`](./requirements.txt). The directory structure we used was placing dataset(s), model checkpoints and analysis artifacts in a single `$SCRATCH` directory with plenty of unused space, while our scripts and CSVs were kept in some home directory as they didn't consume much space. We elected to store our analysis artifacts (embeddings) in `$SCRATCH/stats` and model checkpoints in `$SCRATCH/TS` (standing for "TinyStories").
 
 Some of our scripts make references to an environment file [`env-h`](./env-h) that starts a Python environment, defines shorthand shell functions and imports home variables.
 
-Our codebase is most compatible with a SLURM environment configured for single-GPU runs.
+Our codebase is most compatible with a SLURM environment configured for single-GPU runs, but most of the scripts (those without `batch` in their name) can be run in the shell directly.
 
 ## Model Training
 
@@ -16,7 +16,7 @@ To prepare a model for training, create a folder (probably in `$SCRATCH`) and co
 
 We used a relatively [standard script from Huggingface](https://github.com/huggingface/transformers/blob/main/examples/pytorch/language-modeling/run_clm.py) to train our CLMs. The code was lightly adapted and formatted in [`run_clm.py`](./run_clm.py). This script is invoked by [`train.sh`](./train.sh), which provides an example of training models on an A100 GPU.
 
-Here's an example model that we've made public: https://huggingface.co/rhubarbwu/TinyStories-12x1024_10L
+Here's an example 205M model that we've made public: https://huggingface.co/rhubarbwu/TinyStories-12x1024_10L
 
 ### Dispatching train jobs for several architectures
 
@@ -53,7 +53,7 @@ python run_clm.py --model_name_or_path $MODEL_DIR --output_dir $CKPT_DIR --token
 
 ## Embeddings Collection
 
-In a style similar to `train.sh` and [`config.json`](./config.json), you can use [`coll-clm.sh`](./coll-clm.sh) and [`batch-coll.sh`](./batch-coll.sh) to perform embeddings collection. Note that the `vars` and `decs` stages are both dependencies on the completion of the `means` stage. You can use use ID of the `means` job as a SLURM dependency argument `$5` to `launch()` in [`batch-coll.sh`](./batch-coll.sh).
+In a style similar to `train.sh` and [`config.json`](./config.json), you can use [`coll-clm.sh`](./coll-clm.sh) and [`batch-coll.sh`](./batch-coll.sh) to perform embeddings collection. The `--stage` argument from `coll-clm.sh` to `run_clm.py` takes `means`, `vars`, or `decs`, referring to the collection of means, variances, and NCC decisions. Note that the `vars` and `decs` stages are both dependencies on the completion of the `means` stage. You can use the ID of the `means` job as a SLURM dependency argument `$5` to `launch()` in [`batch-coll.sh`](./batch-coll.sh).
 
 To check the progress of collection stages, run `analyze $@ -prog`. Here's an example:
 
@@ -76,7 +76,7 @@ model             means   vars   decs unique
 02x0768_01d07@0  229367 229367   2303  29233
 02x0768_01d08@0  229367 229367   2303  29233
 02x0768_01d09@0  229367 229367   2303  29233
-total (10)       229367 229367 229367  29233
+total (10)       229367 229367   2303  29233
 ------------------------------------------------------------------------------
 ```
 
@@ -89,16 +89,29 @@ Here's a snippet from `batch-analyze.sh`.
 ```sh
 case $ENV in
 GPU)
+    # require large parallel tensor operations on the GPU
     analyze -etf -kern log -snr -o $OUTPUT -i $FILES
     ;;
 CKPT)
+    # require the trained model checkpoints but no GPU
     analyze -dual -loss -o $OUTPUT -i $FILES
     ;;
 CPU)
+    # do not require checkpoints nor GPUs
     analyze -decs -nor -o $OUTPUT -i $FILES
     ;;
 esac
 ```
+
+| Measurement                                  | Flag        | Prerequisites      |
+| -------------------------------------------- | ----------- | ------------------ |
+| Within-Class Variability ($\mathcal{NC}1$)   | `-snr`      | means, variances   |
+| Norms ($\mathcal{(G)NC}2$)                   | `-nor`      | means              |
+| Interference ($\mathcal{NC}2$)               | `-etf`      | means              |
+| Hyperspherical Uniformity ($\mathcal{GNC}2$) | `-kern log` | means              |
+| Self/Uniform-Duality ($\mathcal{(U)NC}3$)    | `-dual`     | means, checkpoints |
+| Agreement ($\mathcal{NC}4$)                  | `-decs`     | means, decisions   |
+| Generalization (and other model info)        | `-loss`     | checkpoints        |
 
 If all goes well, a CSV-formatted dataframe should be generated.
 
@@ -116,7 +129,7 @@ If there are any bugs or inefficiences in our code, or any other questions, we'd
 ## Citing
 
 ```tex
-@misc{wu2024linguisticcollapseneuralcollapse,
+@misc{wu2024linguisticcollapse,
       title={Linguistic Collapse: Neural Collapse in (Large) Language Models},
       author={Robert Wu and Vardan Papyan},
       year={2024},

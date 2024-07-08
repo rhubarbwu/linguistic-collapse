@@ -2,10 +2,10 @@
 
 #SBATCH --output=logs/collect/%x.%j.log
 #SBATCH --err=logs/collect/%x.%j.log
-##SBATCH --gres=gpu:a10s0:1
+#SBATCH --gres=gpu:a100:1
 #SBATCH --mem=8G
 
-. ./env-n
+. ./env-h
 
 nvidia-smi
 
