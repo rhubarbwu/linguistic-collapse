@@ -4,7 +4,7 @@ from os import makedirs
 from typing import List, Optional, Tuple, Union
 
 import torch as pt
-from datasets import DatasetDict
+from datasets import DatasetDict, concatenate_datasets
 from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
@@ -23,6 +23,16 @@ class CollectArguments:
     batch_size: Optional[int] = field(
         default=1,
         metadata={"help": ("Batch size of collection.")},
+    )
+    data_split: List[str] = field(
+        default_factory=lambda: ["train"],
+        metadata={
+            "help": (
+                "Which data split on which to compute statistics."
+                " The train set should be used for NC1-3, and unseen"
+                " data (validation or test) should be used for NC4."
+            )
+        },
     )
     device: Optional[str] = field(
         default="cpu",
@@ -131,7 +141,18 @@ def collect_embeddings(
     vars_path = f"{vars_dir}/{short_name}@{args.model_ckpt_idx}-vars.pt"
     decs_path = f"{decs_dir}/{short_name}@{args.model_ckpt_idx}-decs.pt"
 
-    data = datasets["validation" if args.stage == "decs" else "train"]
+    if args.stage == "decs" and "train" in args.data_split:
+        print("W: Can't use train splits for decs (NC4); checking validation/test.")
+        args.data_split = ["validation", "test"]
+    elif args.data_split != ["train"]:
+        resp = input("W: Use non-train split for means/vars? [y/N] ")
+        if resp[0].upper() != "Y":
+            exit()
+    for split in args.data_split[::-1]:
+        if split not in datasets:
+            args.data_split.remove(split)
+
+    data = concatenate_datasets([datasets[split] for split in args.data_split])
     N_seqs = len(data)
     extract = lambda i: pt.tensor(data[i]["input_ids"], dtype=pt.int32)
     N_batches = int(math.ceil(N_seqs / args.batch_size))

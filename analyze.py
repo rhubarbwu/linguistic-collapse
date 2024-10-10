@@ -7,8 +7,7 @@ from tqdm import tqdm
 
 from lib.collapse import Statistics
 from lib.model import get_classifier_weights, get_model_stats, split_parts
-from lib.statistics import (collect_hist, commit, create_df, triu_mean,
-                            triu_std, update_df)
+from lib.statistics import commit, create_df, triu_mean, triu_std, update_df
 from lib.utils import identify, is_float, log_kernel, riesz_kernel
 
 pt.set_grad_enabled(False)
@@ -29,7 +28,7 @@ parser.add_argument(
     "--totals",
     type=int,
     nargs=3,
-    default=(469514249, 229367, 29233), # TinyStories train set, 2 workers
+    default=(469514249, 229367, 29233),  # TinyStories train set, 2 workers
 )
 
 parser.add_argument("-i", "--input_files", type=str, nargs="+", default=[])
@@ -45,7 +44,6 @@ parser.add_argument("-kern", "--kernel", type=str, default=None)  # GNC2
 parser.add_argument("-dual", "--duality", action="store_true")  # NC3
 parser.add_argument("-decs", "--decisions", action="store_true")  # NC4
 parser.add_argument("-each", "--each_model", action="store_true")
-parser.add_argument("-hist", "--histograms", action="store_true")
 parser.add_argument("-freq", "--frequency", action="store_true")
 
 parser.add_argument("-mpc", "--min_per_class", type=int, default=1)
@@ -156,18 +154,12 @@ if args.force:
     missing = lambda k, i: True
 
 
-def triu_stats_histogram(data: pt.Tensor, key: str):
+def triu_stats(data: pt.Tensor, key: str):
     mean = triu_mean(data)
     std = triu_std(data, mean)
 
     update_df(df, f"{key}_mean", mean, iden)
     update_df(df, f"{key}_std", std, iden)
-
-    if args.histograms:
-        bins, edges = collect_hist(data, args.num_bins, True)
-        commit(args.output_file, f"{key}_bins", bins, iden)
-        commit(args.output_file, f"{key}_edges", edges, iden)
-        del bins, edges
 
 
 for iden in tqdm(IDENTIFIERS):
@@ -194,16 +186,9 @@ for iden in tqdm(IDENTIFIERS):
         if CDNVs is not None and collected.N2 == args.totals[0]:
             mean = triu_mean(CDNVs)
             std = triu_std(CDNVs, mean)
+            del CDNVs
             update_df(df, "cdnv_mean", mean, iden)
             update_df(df, "cdnv_std", std, iden)
-            if args.histograms:
-                pt.log_(CDNVs)
-                bins, edges = collect_hist(CDNVs, args.num_bins, True)
-                commit(args.output_file, "cdnv_bins", bins, iden)
-                commit(args.output_file, "cdnv_edges", edges, iden)
-                del bins, edges
-
-            del CDNVs
 
     if args.norms and missing("norms_logscl_std", iden):  # NC2 equinorm
         norms = collected.mean_norms(indices, False, False)
@@ -224,22 +209,17 @@ for iden in tqdm(IDENTIFIERS):
 
         if args.frequency:
             commit(args.output_file, "norms", norms, iden)
-        if args.histograms:
-            bins, edges = collect_hist(norms.unsqueeze(0), args.num_bins)
-            commit(args.output_file, "norms_bins", bins, iden)
-            commit(args.output_file, "norms_edges", edges, iden)
-            del bins, edges
         del norms
 
     if args.interfere and missing("interfere_std", iden):  # NC2 simplex ETF
         interfere = collected.interference(indices, args.patch_size)
-        triu_stats_histogram(interfere, "interfere")
+        triu_stats(interfere, "interfere")
         del interfere
 
     if args.kernel and missing(f"{args.kernel}_dist_std", iden):  # GNC2
         kernel = riesz_kernel if "riesz" in args.kernel else log_kernel
         distances = collected.kernel_distances(indices, kernel, args.patch_size)
-        triu_stats_histogram(distances, f"{args.kernel}_dist")
+        triu_stats(distances, f"{args.kernel}_dist")
         del distances
 
     if args.duality and missing("sims_std", iden):  # NC3 duality
@@ -251,31 +231,19 @@ for iden in tqdm(IDENTIFIERS):
             dists = collected.dual_dists(W, indices)
             update_df(df, "dists_mean", dists.mean(), iden)
             update_df(df, "dists_std", dists.std(), iden)
-            if args.histograms:
-                bins, edges = collect_hist(dists, args.num_bins)
-                commit(args.output_file, "dists_bins", bins, iden)
-                commit(args.output_file, "dists_edges", edges, iden)
-                del bins, edges
             del dists
 
             sims = collected.similarity(W, indices)
             update_df(df, "sims_mean", sims.mean(), iden)
             update_df(df, "sims_std", sims.std(), iden)
-            if args.histograms:
-                bins, edges = collect_hist(sims, args.num_bins)
-                commit(args.output_file, "sims_bins", bins, iden)
-                commit(args.output_file, "sims_edges", edges, iden)
-                del bins, edges
-            del sims
-
-            del W
+            del sims, W
 
     if args.decisions and missing("matches_std", iden):  # NC4 agreement
         matches, misses = collected.matches[indices], collected.misses[indices]
         update_df(df, "misses", int(misses.sum()), iden)
         update_df(df, "matches", int(matches.sum()), iden)
 
-        matches = matches.to(pt.float32)
+        matches = matches.to(float)
         update_df(df, "matches_mean", matches.mean(), iden)
         update_df(df, "matches_std", matches.std(), iden)
 

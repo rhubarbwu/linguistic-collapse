@@ -1,8 +1,11 @@
 #!/bin/sh
 
-. ~/.bashrc # define HF_HOME and SCRATCH paths
-. ~/pt/bin/activate
-echo $HOSTNAME
+. ~/.bashrc
+
+SCRATCH=${SCRATCH:"./"} # set somewhere with plenty of disk space
+# HF_HOME=${SCRATCH:"./"} # optionally set HF_HOME to the same scratch space
+
+. ~/pt/bin/activate # or elsehow activate python environment
 
 model() {
     python -m lib.model -mc $SCRATCH $@
@@ -22,7 +25,7 @@ covs() {
 
 analyze() {
     STATS_DIR=$SCRATCH/stats
-    python analyze.py -mc $SCRATCH/TS -i $STATS_DIR/*/* -dev cuda:0 -o lc $@
+    python analyze.py -mc $SCRATCH/WT -i $STATS_DIR/*/* -dev cuda:0 -o lc $@
 }
 
 progress() {

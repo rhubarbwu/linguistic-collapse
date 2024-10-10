@@ -26,7 +26,7 @@ def apply_pca(data: Tensor, K: int = 2) -> Tensor:
     return projected
 
 
-def triu_mean(data: Tensor, desc: str = "means") -> pt.float:
+def triu_mean(data: Tensor, desc: str = "means") -> float:
     """Compute the mean of the upper triangle in <data>."""
     N = data.shape[0]
     total = 0
@@ -46,8 +46,8 @@ def triu_mean(data: Tensor, desc: str = "means") -> pt.float:
 
 
 def triu_std(
-    data: Tensor, mean: pt.float = None, correction: bool = True, desc: str = "std"
-) -> pt.float:
+    data: Tensor, mean: float = None, correction: bool = True, desc: str = "std"
+) -> float:
     """Compute the std of the upper triangle in <data>."""
     debias = 1 if correction else 0
     if mean is None:
@@ -68,41 +68,6 @@ def triu_std(
 
     var = total / (N * (N - 1) / 2 - debias)
     return var.sqrt()
-
-
-def collect_hist(
-    data: Tensor, num_bins: int = 64, triu: bool = False, desc: str = "histogram"
-) -> Tuple[Tensor, Tensor]:
-    """Compute the histogram of <data>.
-    data: original matrix on which to compute statistics.
-    num_bins: number of bins to collect for histogram.
-    triu: whether to only compute the upper triangle.
-    desc: progress bar text description.
-    """
-    N = data.shape[0]
-    min_val, max_val = data.min(), data.max()
-    val_range = max_val - min_val
-    min_val -= 0.01 * val_range
-    max_val += 0.01 * val_range
-
-    hist = pt.zeros(num_bins, dtype=select_int_type(data.numel()), device=data.device)
-    count = lambda x: pt.histc(x, num_bins, min_val, max_val).int()
-    if triu:
-        for i in tqdm(range((N - 1) // 2), ncols=79, desc=desc):
-            upper = data[i][i + 1 :]
-            lower = data[N - i - 2][N - i - 1 :]
-            folded = pt.cat((upper, lower))
-            hist += count(folded)
-        if N % 2 == 0:
-            row = data[N // 2 - 1][N // 2 :]
-            hist += count(row)
-    else:
-        for row in tqdm(data, ncols=79, desc=desc):
-            hist += count(row)
-
-    edges = pt.linspace(min_val, max_val, num_bins + 1)
-
-    return hist, edges
 
 
 def create_df(path: str) -> pd.DataFrame:

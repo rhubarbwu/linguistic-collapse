@@ -4,9 +4,7 @@ from typing import List, Tuple, Union
 
 import torch as pt
 from torch import Tensor
-from tqdm import tqdm
 
-from lib.statistics import collect_hist, triu_mean, triu_std
 from lib.utils import (class_dist_norm_var, inner_product, log_kernel,
                        normalize, select_int_type)
 
@@ -17,7 +15,7 @@ class Statistics:
         C: int = None,
         D: int = None,
         device: Union[str, pt.device] = "cpu",
-        dtype: pt.dtype = pt.float32,
+        dtype: pt.dtype = float,
         load_means: str = None,
         load_vars: str = None,
         load_decs: str = None,
@@ -268,7 +266,7 @@ class Statistics:
 
         return dists  # C' x C'
 
-    def dual_dists(self, weights: Tensor, idxs: List[int] = None) -> pt.float:
+    def dual_dists(self, weights: Tensor, idxs: List[int] = None) -> float:
         """Compute distances between means and classifier.
         The average of this matrix measures convergence to self-duality (NC3).
         weights (C x D): weights of the linear classifier
@@ -362,7 +360,7 @@ class Statistics:
             print(f"  W: file {file} not found; need to collect means from scratch")
             return 0
 
-        data = pt.load(file, self.device)
+        data = pt.load(file, self.device, weights_only=True)
         assert self.hash in [None, data["hash"]], "overwriting current data"
         self.hash = data["hash"]
 
@@ -410,7 +408,7 @@ class Statistics:
             print(f"  W: path {file} not found; need to collect vars from scratch")
             return 0
 
-        data = pt.load(file, self.device)
+        data = pt.load(file, self.device, weights_only=True)
         assert self.hash in [
             None,
             data["hash"],
@@ -461,7 +459,7 @@ class Statistics:
             print(f"  W: path {file} not found; need to collect decs from scratch")
             return 0
 
-        data = pt.load(file, self.device)
+        data = pt.load(file, self.device, weights_only=True)
         assert self.hash in [
             None,
             data["hash"],
