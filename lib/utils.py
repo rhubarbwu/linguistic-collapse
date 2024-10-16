@@ -1,13 +1,11 @@
 import gc
-from math import copysign, isnan
+from math import isnan
 from os.path import isfile
 from typing import Any, List, Set, Tuple
 
 import torch as pt
 import torch.linalg as la
-from torch import (Tensor, bfloat16, float16, float32, int8, int16, int32,
-                   int64, uint8)
-from tqdm import tqdm
+from torch import bfloat16, float16, float32, int8, int16, int32, int64, uint8
 
 frobenize = lambda x: x / la.norm(x)
 normalize = lambda x: x / (la.norm(x, dim=-1, keepdim=True) + pt.finfo(x.dtype).eps)
@@ -124,103 +122,3 @@ def extract_parts(string: str, delims: Set[str]):
         parts[delim] = string[idx + len(delim) : next_idx]
 
     return parts
-
-
-def patching(
-    data: Tensor,
-    kernel: callable,
-    patch_size: int = 1,
-    tqdm_desc: str = None,
-) -> Tensor:
-    """General algorithm to compute pair-wise interactions in patches for GPU efficiency.
-    data: matrix of d-dimension vectors on which to compute similarity.
-    kernel: function that computes pair-wise interactions.
-    patch_size: size of patch to compute (depending on GPU capacity).
-    tqdm_desc: progress bar display text.
-    """
-    N = len(data)
-    outgrid = pt.zeros((N, N), device=data.device)
-    n_patches = (N + patch_size - 1) // patch_size
-
-    for i in tqdm(range(n_patches), ncols=79, desc=tqdm_desc):
-        i0, i1 = i * patch_size, min((i + 1) * patch_size, N)
-        patch_i = data[i0:i1]
-        for j in range(n_patches):
-            j0, j1 = j * patch_size, min((j + 1) * patch_size, N)
-            patch_j = data[j0:j1]
-            outgrid[i0:i1, j0:j1] = kernel(patch_i, patch_j)
-
-    return outgrid
-
-
-def inner_product(data: Tensor, patch_size: int = None) -> Tensor:
-    """Compute inner product of a matrix's vectors.
-    data: matrix of d-dimension vectors on which to compute similarity.
-    patch_size: size of patch to compute (depending on GPU capacity).
-    """
-    if not patch_size:
-        return pt.inner(data, data)
-
-    kernel_grid = patching(data, pt.inner, patch_size, "inner prod")
-    return kernel_grid
-
-
-def log_kernel(data: Tensor, patch_size: int = 1) -> Tensor:
-    """Compute kernel distance with logarithmic kernel.
-    data: matrix of d-dimension vectors on which to compute distances.
-    patch_size: size of patch to compute (depending on GPU capacity).
-    """
-    normed = normalize(data)
-
-    def kernel(patch_i, patch_j):
-        diff = patch_i.unsqueeze(1) - patch_j
-        diff_norms = diff.norm(dim=-1)
-        return (diff_norms ** (-1)).log()
-
-    kernel_grid = patching(normed, kernel, patch_size, "log kernel")
-
-    return kernel_grid
-
-
-def riesz_kernel(data: Tensor, patch_size: int = 1) -> Tensor:
-    """Compute kernel distance with Riesz kernel.
-    data: matrix of d-dimension vectors on which to compute distances.
-    patch_size: size of patch to compute (depending on GPU capacity).
-    """
-    S = data.shape[-1] - 2
-    normed = normalize(data)
-
-    def kernel(patch_i, patch_j):
-        diff = patch_i.unsqueeze(1) - patch_j
-        diff_norms = diff.norm(dim=-1)
-        return copysign(1, S) * diff_norms ** (-S)
-
-    kernel_grid = patching(normed, kernel, patch_size, "riesz kernel")
-
-    return kernel_grid
-
-
-def class_dist_norm_var(
-    means: Tensor, vars_normed: Tensor, patch_size: int = 1
-) -> Tensor:
-    """Compute normalized variance (CDNV). https://arxiv.org/abs/2112.15121
-    means: class mean embeddings.
-    vars_normed: normalized variances.
-    patch_size: size of patch to compute (depending on GPU capacity).
-    """
-    vars_normed = vars_normed.view(-1, 1)
-    bundled = pt.cat((means, vars_normed), dim=1)
-
-    def kernel(patch_i, patch_j):
-        vars_i, vars_j = patch_i[:, -1], patch_j[:, -1]
-        var_avgs = (vars_i.unsqueeze(1) + vars_j).squeeze() / 2
-
-        means_i, means_j = patch_i[:, :-1], patch_j[:, :-1]
-
-        means_diff = means_i.unsqueeze(1) - means_j
-        inner = pt.sum(means_diff * means_diff, dim=-1)
-        return var_avgs.squeeze(0) / inner / inner
-
-    kernel_grid = patching(bundled, kernel, patch_size, "cdnvs")
-
-    return kernel_grid

@@ -25,7 +25,7 @@ covs() {
 
 analyze() {
     STATS_DIR=$SCRATCH/stats
-    python analyze.py -mc $SCRATCH/WT -i $STATS_DIR/*/* -dev cuda:0 -o lc $@
+    python analyze.py -mc $SCRATCH/TS -i $STATS_DIR/*/* -dev cuda:0 -o lc $@
 }
 
 progress() {
