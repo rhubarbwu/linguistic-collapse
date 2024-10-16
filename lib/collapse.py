@@ -3,10 +3,10 @@ from hashlib import sha256
 from typing import List, Tuple, Union
 
 import torch as pt
+from neural_collapse.kernels import class_dist_norm_var
 from torch import Tensor
 
-from lib.utils import (class_dist_norm_var, inner_product, log_kernel,
-                       normalize, select_int_type)
+from lib.utils import select_int_type
 
 
 class Statistics:
@@ -85,7 +85,7 @@ class Statistics:
         """
 
         if len(Y.shape) < 1:
-            print("W: batch too short")
+            print("WARN: batch too short")
             return None, None
         if len(Y.shape) > 1:
             Y = pt.squeeze(Y)
@@ -196,7 +196,7 @@ class Statistics:
     def compute_vars(
         self,
         idxs: List[int] = None,
-        patch_size: int = 1,
+        tile_size: int = 1,
     ) -> Tensor:
         """Compute the overall covariances of the dataset.
         idxs: classes to select for subsampled computation.
@@ -211,121 +211,8 @@ class Statistics:
             counts, var_sums = counts[idxs], var_sums[idxs]
         vars_normed = var_sums / counts
 
-        CDNVs = class_dist_norm_var(
-            means,
-            vars_normed,
-            patch_size,
-        )
-
+        CDNVs = class_dist_norm_var(vars_normed, means, 2, tile_size)
         return CDNVs
-
-    ## COLLAPSE MEASURES ##
-
-    def mean_norms(
-        self, idxs: List[int] = None, log: bool = False, dim_norm: bool = False
-    ) -> Tensor:
-        """Compute norms of class means for measure equinormness of NC2/GCN2.
-        idxs: classes to select for subsampled computation.
-        """
-        means, mean_G = self.compute_means(idxs)
-        mean_diffs = means - mean_G  # C' x D
-        norms = mean_diffs.norm(dim=-1) ** 2  # C'
-        if dim_norm:
-            norms /= self.D**0.5
-        if log:
-            norms = norms.log()
-        return norms
-
-    def interference(self, idxs: List[int] = None, patch_size: int = None) -> Tensor:
-        """Compute interference between class means to measure convergence to
-        a simplex ETF (NC2), which is equivalent to the identity matrix.
-        idxs: classes to select for subsampled computation.
-        patch_size: the max patch size for memory-constrained environments.
-        """
-
-        means, mean_G = self.compute_means(idxs)
-        mean_diffs = means - mean_G  # C' x D
-
-        interference = inner_product(normalize(mean_diffs), patch_size)
-
-        return interference  # C' x C'
-
-    def kernel_distances(
-        self,
-        idxs: List[int] = None,
-        kernel: callable = log_kernel,
-        patch_size: int = 1,
-    ) -> Tensor:
-        """Compute kernel distances towards to measure convergence to
-        hyperspherical uniformity (GNC2, https://arxiv.org/abs/2303.06484).
-        idxs: classes to select for subsampled computation.
-        kernel: how to compute kernel distance between points.
-        """
-        means, _ = self.compute_means(idxs)
-        dists = kernel(means, patch_size)  # C' x C'
-
-        return dists  # C' x C'
-
-    def dual_dists(self, weights: Tensor, idxs: List[int] = None) -> float:
-        """Compute distances between means and classifier.
-        The average of this matrix measures convergence to self-duality (NC3).
-        weights (C x D): weights of the linear classifier
-        idxs: classes to select for subsampled computation.
-        """
-        means, mean_G = self.compute_means(idxs)
-        means_normed = normalize(means - mean_G).to(self.device)  # C x D
-
-        weights = weights if idxs is None else weights[idxs]
-        weights_normed = normalize(weights).to(self.device)  # C x D
-
-        distances = normalize(weights_normed - means_normed)
-        result = pt.sum(distances, dim=1)
-
-        return result
-
-    def similarity(
-        self,
-        weights: Tensor,
-        idxs: List[int] = None,
-    ) -> Tensor:
-        """Compute dot-product similarities between means and classifier.
-        The average of this matrix is linearly related to self-duality (NC3).
-        weights (C x D): weights of the linear classifier.
-        idxs: classes to select for subsampled computation.
-        dims: dimensions on which to project the weights and mean norms.
-        """
-        means, mean_G = self.compute_means(idxs)
-        means_normed = normalize(means - mean_G).to(self.device)  # C x D
-
-        weights = weights if idxs is None else weights[idxs]
-        weights_normed = normalize(weights).to(self.device)  # C x D
-
-        dot_prod = means_normed * weights_normed  # C x D
-        result = pt.sum(dot_prod, dim=1)  # C
-
-        return result
-
-    def project_classes(
-        self,
-        weights: Tensor,
-        idxs: List[int] = None,
-        dims: Tuple[int] = None,
-    ):
-        """Project means and classifiers to selected dimensions.
-        weights (C x D): weights of the linear classifier.
-        idxs: classes to select for subsampled computation.
-        dims: dimensions on which to project the weights and mean norms.
-        """
-        means, mean_G = self.compute_means(idxs)
-        means_normed = normalize(means - mean_G).to(self.device)  # C x D
-
-        weights = weights if idxs is None else weights[idxs]
-        weights_normed = normalize(weights).to(self.device)  # C x D
-
-        selected = (weights_normed[dims, :] + means_normed[dims, :]) / 2
-        proj_means = selected @ means_normed.mT
-        proj_cls = selected @ weights_normed.mT
-        return proj_means, proj_cls
 
     ## SAVING AND LOADING ##
 

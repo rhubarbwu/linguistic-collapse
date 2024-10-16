@@ -2,6 +2,7 @@ accelerate
 datasets
 evaluate
 h5py
+neural_collapse @ git+https://github.com/rhubarbwu/neural-collapse
 optimum
 pandas
 torch

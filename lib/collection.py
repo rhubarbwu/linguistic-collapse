@@ -142,10 +142,10 @@ def collect_embeddings(
     decs_path = f"{decs_dir}/{short_name}@{args.model_ckpt_idx}-decs.pt"
 
     if args.stage == "decs" and "train" in args.data_split:
-        print("W: Can't use train splits for decs (NC4); checking validation/test.")
+        print("WARN: Can't use train splits for decs (NC4); trying validation/test.")
         args.data_split = ["validation", "test"]
     elif args.data_split != ["train"]:
-        resp = input("W: Use non-train split for means/vars? [y/N] ")
+        resp = input("WARN: Use non-train split for means/vars? [y/N] ")
         if resp[0].upper() != "Y":
             exit()
     for split in args.data_split[::-1]:

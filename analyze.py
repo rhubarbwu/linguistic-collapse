@@ -3,12 +3,16 @@ from os.path import exists, isfile
 
 import torch as pt
 from pandas import DataFrame
-from tqdm import tqdm
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = lambda x: x
 
 from lib.collapse import Statistics
 from lib.model import get_classifier_weights, get_model_stats, split_parts
-from lib.statistics import commit, create_df, triu_mean, triu_std, update_df
-from lib.utils import identify, is_float, log_kernel, riesz_kernel
+from lib.statistics import commit, create_df, save_stats, update_df
+from lib.utils import identify, is_float
 
 pt.set_grad_enabled(False)
 
@@ -48,20 +52,17 @@ parser.add_argument("-freq", "--frequency", action="store_true")
 
 parser.add_argument("-mpc", "--min_per_class", type=int, default=1)
 parser.add_argument("-Mpc", "--max_per_class", type=int, default=None)
-parser.add_argument("-ps", "--patch_size", type=int, default=1024)
-parser.add_argument("-nb", "--num_bins", type=int, default=1024)
-parser.add_argument("-d", "--dims", type=int, nargs=2, default=None)
+parser.add_argument("-ts", "--tile_size", type=int, default=1024)
 
 args = parser.parse_args()
 
 if "cuda" in args.device and not pt.cuda.is_available():
-    print(f"W: CUDA device {args.device} unavailable; defaulting to CPU")
+    print(f"WARN: CUDA device {args.device} unavailable; defaulting to CPU")
     args.device = "cpu"
 
 
-ANALYSIS = args.model_stats
-ANALYSIS |= args.inv_snr | args.duality | args.decisions  # NC1,3,4
-ANALYSIS |= args.norms | args.interfere | (args.kernel is not None)  # (G)NC2
+REQ_MEANS = args.norms | args.interfere | (args.kernel is not None) | args.duality
+ANALYSIS = args.model_stats | args.inv_snr | REQ_MEANS | args.decisions
 
 
 PATHS = {}
@@ -144,7 +145,8 @@ for iden in INCOMPLETE:
     del PATHS[iden]
     IDENTIFIERS.remove(iden)
 
-if args.single:  # run the first one for debugging purposes
+if args.single:
+    print("WARN: only analyzing one model for debugging purposes")
     IDENTIFIERS = IDENTIFIERS[0:1]
 
 
@@ -153,14 +155,10 @@ missing = lambda k, i: not (k in df and i in df.index and is_float(df[k][i]))
 if args.force:
     missing = lambda k, i: True
 
-
-def triu_stats(data: pt.Tensor, key: str):
-    mean = triu_mean(data)
-    std = triu_std(data, mean)
-
-    update_df(df, f"{key}_mean", mean, iden)
-    update_df(df, f"{key}_std", std, iden)
-
+from neural_collapse.kernels import kernel_grid, log_kernel, riesz_kernel
+from neural_collapse.measure import (distance_norms, interference_grid,
+                                     mean_norms, self_duality_error,
+                                     similarities, simplex_etf_error)
 
 for iden in tqdm(IDENTIFIERS):
     if iden not in PATHS:
@@ -177,81 +175,60 @@ for iden in tqdm(IDENTIFIERS):
         commit(f"{args.output_file}", "counts", counts)
 
     if args.model_stats:
-        train_stats = get_model_stats(f"TinyStories-{iden}", args)
-        for stat_key in train_stats.keys():
-            update_df(df, stat_key, train_stats[stat_key], iden)
+        try:
+            train_stats = get_model_stats(f"TinyStories-{iden}", args)
+            for key in train_stats.keys():
+                update_df(df, key, train_stats[key], iden)
+        except:
+            print(f"WARN: failed to load info for {iden}.")
 
-    if args.inv_snr and missing("cdnv_std", iden):  # NC1
-        CDNVs = collected.compute_vars(indices, args.patch_size)
+    if REQ_MEANS:
+        M, mG = collected.compute_means(indices)
+
+    if args.inv_snr and missing("cdnv_var", iden):  # NC1
+        CDNVs = collected.compute_vars(indices, args.tile_size)
         if CDNVs is not None and collected.N2 == args.totals[0]:
-            mean = triu_mean(CDNVs)
-            std = triu_std(CDNVs, mean)
+            save_stats(df, CDNVs, "cdnv", iden, True)
             del CDNVs
-            update_df(df, "cdnv_mean", mean, iden)
-            update_df(df, "cdnv_std", std, iden)
 
-    if args.norms and missing("norms_logscl_std", iden):  # NC2 equinorm
-        norms = collected.mean_norms(indices, False, False)
-        update_df(df, "norms_mean", norms.mean(), iden)
-        update_df(df, "norms_std", norms.std(), iden)
-
-        norms_scaled = collected.mean_norms(indices, False, True)
-        update_df(df, "norms_scl_mean", norms_scaled.mean(), iden)
-        update_df(df, "norms_scl_std", norms_scaled.std(), iden)
-
-        norms_logged = collected.mean_norms(indices, True, False)
-        update_df(df, "norms_log_mean", norms_logged.mean(), iden)
-        update_df(df, "norms_log_std", norms_logged.std(), iden)
-
-        norms_logscaled = collected.mean_norms(indices, True, True)
-        update_df(df, "norms_logscl_mean", norms_logscaled.mean(), iden)
-        update_df(df, "norms_logscl_std", norms_logscaled.std(), iden)
-
+    if args.norms and missing("norms_var", iden):  # NC2 equinorm
+        norms = mean_norms(M, mG)
+        save_stats(df, norms, "norms", iden)
         if args.frequency:
             commit(args.output_file, "norms", norms, iden)
         del norms
 
-    if args.interfere and missing("interfere_std", iden):  # NC2 simplex ETF
-        interfere = collected.interference(indices, args.patch_size)
-        triu_stats(interfere, "interfere")
-        del interfere
+    if args.interfere and missing("interfere_var", iden):  # NC2 simplex ETF
+        interference = interference_grid(M, mG)
+        update_df(df, "etf_error", simplex_etf_error(M, mG), iden)
+        save_stats(df, interference, "interfere", iden, True)
+        del interference
 
-    if args.kernel and missing(f"{args.kernel}_dist_std", iden):  # GNC2
+    if args.kernel and missing(f"{args.kernel}_kern_var", iden):  # GNC2
         kernel = riesz_kernel if "riesz" in args.kernel else log_kernel
-        distances = collected.kernel_distances(indices, kernel, args.patch_size)
-        triu_stats(distances, f"{args.kernel}_dist")
-        del distances
+        dists = kernel_grid(M, mG, kernel, args.tile_size)
+        save_stats(df, dists, f"{args.kernel}_kern", iden, True)
+        del dists
 
-    if args.duality and missing("sims_std", iden):  # NC3 duality
+    if args.duality and missing("dual_error", iden):  # NC3 duality
         W = get_classifier_weights(f"TinyStories-{iden}", args)
-
         if W is None:
-            print("W: failed to load weights.")
+            print(f"WARN: failed to load weights for {iden}.")
         else:
-            dists = collected.dual_dists(W, indices)
-            update_df(df, "dists_mean", dists.mean(), iden)
-            update_df(df, "dists_std", dists.std(), iden)
-            del dists
+            W = W if indices is None else W[indices]
+            dual_error = self_duality_error(M.to(W.dtype), W, mG.to(W.dtype))
+            update_df(df, "dual_error", dual_error, iden)
+            save_stats(df, similarities(M, W, mG), "simdot", iden)
+            save_stats(df, similarities(M, W, mG, True), "simcos", iden)
+            save_stats(df, distance_norms(W, M, mG), "dists", iden)
+        del W
 
-            sims = collected.similarity(W, indices)
-            update_df(df, "sims_mean", sims.mean(), iden)
-            update_df(df, "sims_std", sims.std(), iden)
-            del sims, W
-
-    if args.decisions and missing("matches_std", iden):  # NC4 agreement
-        matches, misses = collected.matches[indices], collected.misses[indices]
+    if args.decisions and missing("hits", iden):  # NC4 agreement
+        hits, misses = collected.matches[indices], collected.misses[indices]
+        update_df(df, "hits", int(hits.sum()), iden)
         update_df(df, "misses", int(misses.sum()), iden)
-        update_df(df, "matches", int(matches.sum()), iden)
 
-        matches = matches.to(float)
-        update_df(df, "matches_mean", matches.mean(), iden)
-        update_df(df, "matches_std", matches.std(), iden)
-
-    df.to_csv(f"{args.output_file}.csv")
     del collected
-
-
-df.to_csv(f"{args.output_file}.csv")
-
+    df.to_csv(f"{args.output_file}.csv")
 
 print(LINE_SEP)
