@@ -9,9 +9,9 @@ try:
 except ImportError:
     tqdm = lambda x: x
 
-from lib.collapse import Statistics
+from lib.collapse import CollapseStatistics
 from lib.model import get_classifier_weights, get_model_stats, split_parts
-from lib.statistics import commit, create_df, save_stats, update_df
+from lib.statistics import commit, create_df, save_metrics, update_df
 from lib.utils import identify, is_float
 
 pt.set_grad_enabled(False)
@@ -61,8 +61,10 @@ if "cuda" in args.device and not pt.cuda.is_available():
     args.device = "cpu"
 
 
-REQ_MEANS = args.norms | args.interfere | (args.kernel is not None) | args.duality
-ANALYSIS = args.model_stats | args.inv_snr | REQ_MEANS | args.decisions
+REQ_MEANS = args.inv_snr | args.norms | args.interfere | args.duality
+REQ_MEANS |= args.kernel is not None
+ANALYSIS = args.model_stats | REQ_MEANS | args.decisions
+mpc, Mpc = args.min_per_class, args.max_per_class
 
 
 PATHS = {}
@@ -88,11 +90,11 @@ for file in sorted(args.input_files, key=lambda x: x.split("/")[-1]):
 
 
 def get_stats(iden):
-    stats = Statistics(
+    stats = CollapseStatistics(
         device=args.device,
-        load_means=PATHS[iden][0],
-        load_vars=PATHS[iden][1],
-        load_decs=PATHS[iden][2],
+        means_path=PATHS[iden][0],
+        vars_path=PATHS[iden][1],
+        decs_path=PATHS[iden][2],
         verbose=False,
     )
     return stats
@@ -101,22 +103,17 @@ def get_stats(iden):
 if args.progress:
     PROGRESS = {}
 
-INCOMPLETE = []
-
 
 for iden in tqdm(PATHS):
-    collected: Statistics = get_stats(iden)
-    Ns = (collected.N1, collected.N2, collected.N3)
-    Ns_seqs = (collected.N1_seqs, collected.N2_seqs, collected.N3_seqs)
-    if not (Ns[0] == Ns[1] == args.totals[0]):
-        INCOMPLETE.append(iden)
+    nc_stats: CollapseStatistics = get_stats(iden)
 
     if args.progress:
-        N_unique = collected.counts_in_range(args.min_per_class).shape[0]
+        N_unique = nc_stats.means_accum.filter_indices_by_n_samples(mpc, Mpc).shape[0]
+        Ns_seqs = (nc_stats.N_seqs_means, nc_stats.N_seqs_vars, nc_stats.N_seqs_decs)
         PROGRESS[iden] = (*Ns_seqs, N_unique)
         COL_WIDTH = max(COL_WIDTH, max(len(str(n)) for n in PROGRESS[iden]))
 
-    del collected
+    del nc_stats
 
 
 IDENTIFIERS = sorted(PATHS.keys(), key=lambda x: split_parts(x)[1])  # sort by dim
@@ -141,10 +138,6 @@ if not ANALYSIS:
     exit()
 
 
-for iden in INCOMPLETE:
-    del PATHS[iden]
-    IDENTIFIERS.remove(iden)
-
 if args.single:
     print("WARN: only analyzing one model for debugging purposes")
     IDENTIFIERS = IDENTIFIERS[0:1]
@@ -158,7 +151,8 @@ if args.force:
 from neural_collapse.kernels import kernel_grid, log_kernel, riesz_kernel
 from neural_collapse.measure import (distance_norms, interference_grid,
                                      mean_norms, self_duality_error,
-                                     similarities, simplex_etf_error)
+                                     similarities, simplex_etf_error,
+                                     variability_cdnv)
 
 for iden in tqdm(IDENTIFIERS):
     if iden not in PATHS:
@@ -167,14 +161,12 @@ for iden in tqdm(IDENTIFIERS):
     if args.verbose:
         print("ANALYZE", iden)
 
-    collected: Statistics = get_stats(iden)
-
-    indices = collected.counts_in_range(args.min_per_class, args.max_per_class)
-    counts = collected.counts[indices]
+    nc_stats: CollapseStatistics = get_stats(iden)
+    indices = nc_stats.means_accum.filter_indices_by_n_samples(mpc, Mpc)
     if not exists(f"{args.output_file}.h5"):
-        commit(f"{args.output_file}", "counts", counts)
+        commit(f"{args.output_file}", "Ns_toks", nc_stats.means_accum.ns_samples)
 
-    if args.model_stats:
+    if args.model_stats and missing("n_params", iden):
         try:
             train_stats = get_model_stats(f"TinyStories-{iden}", args)
             for key in train_stats.keys():
@@ -183,17 +175,22 @@ for iden in tqdm(IDENTIFIERS):
             print(f"WARN: failed to load info for {iden}.")
 
     if REQ_MEANS:
-        M, mG = collected.compute_means(indices)
+        M, mG = nc_stats.means_accum.compute(indices)
 
     if args.inv_snr and missing("cdnv_var", iden):  # NC1
-        CDNVs = collected.compute_vars(indices, args.tile_size)
-        if CDNVs is not None and collected.N2 == args.totals[0]:
-            save_stats(df, CDNVs, "cdnv", iden, True)
-            del CDNVs
+        N_vars, N_means = nc_stats.N_seqs_vars, nc_stats.N_seqs_means
+        if N_vars < N_means:
+            print(f"W: vars for {iden} incomplete ({N_vars} < {N_means}); skipping")
+        elif N_vars > N_means:
+            print(f"E: too many vars ({N_vars} > {N_means})! skipping")
+        else:
+            V = nc_stats.vars_accum.compute(indices)[0]
+            update_df(df, "cdnv", variability_cdnv(V, M, 2, args.tile_size), iden)
+            del V
 
     if args.norms and missing("norms_var", iden):  # NC2 equinorm
         norms = mean_norms(M, mG)
-        save_stats(df, norms, "norms", iden)
+        save_metrics(df, norms, "norms", iden)
         if args.frequency:
             commit(args.output_file, "norms", norms, iden)
         del norms
@@ -201,13 +198,13 @@ for iden in tqdm(IDENTIFIERS):
     if args.interfere and missing("interfere_var", iden):  # NC2 simplex ETF
         interference = interference_grid(M, mG)
         update_df(df, "etf_error", simplex_etf_error(M, mG), iden)
-        save_stats(df, interference, "interfere", iden, True)
+        save_metrics(df, interference, "interfere", iden, True)
         del interference
 
     if args.kernel and missing(f"{args.kernel}_kern_var", iden):  # GNC2
         kernel = riesz_kernel if "riesz" in args.kernel else log_kernel
         dists = kernel_grid(M, mG, kernel, args.tile_size)
-        save_stats(df, dists, f"{args.kernel}_kern", iden, True)
+        save_metrics(df, dists, f"{args.kernel}_kern", iden, True)
         del dists
 
     if args.duality and missing("dual_error", iden):  # NC3 duality
@@ -216,19 +213,20 @@ for iden in tqdm(IDENTIFIERS):
             print(f"WARN: failed to load weights for {iden}.")
         else:
             W = W if indices is None else W[indices]
-            dual_error = self_duality_error(M.to(W.dtype), W, mG.to(W.dtype))
+            dual_error = self_duality_error(W, M.to(W.dtype), mG.to(W.dtype))
             update_df(df, "dual_error", dual_error, iden)
-            save_stats(df, similarities(M, W, mG), "simdot", iden)
-            save_stats(df, similarities(M, W, mG, True), "simcos", iden)
-            save_stats(df, distance_norms(W, M, mG), "dists", iden)
+            save_metrics(df, similarities(W, M, mG), "simdot", iden)
+            save_metrics(df, similarities(W, M, mG, True), "simcos", iden)
+            save_metrics(df, distance_norms(W, M, mG), "dists", iden)
         del W
 
     if args.decisions and missing("hits", iden):  # NC4 agreement
-        hits, misses = collected.matches[indices], collected.misses[indices]
-        update_df(df, "hits", int(hits.sum()), iden)
-        update_df(df, "misses", int(misses.sum()), iden)
+        hits = nc_stats.decs_accum.totals[indices]
+        misses = nc_stats.decs_accum.ns_samples[indices] - hits
+        update_df(df, "hits", hits.sum(), iden)
+        update_df(df, "misses", misses.sum(), iden)
 
-    del collected
+    del nc_stats
     df.to_csv(f"{args.output_file}.csv")
 
 print(LINE_SEP)

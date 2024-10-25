@@ -5,11 +5,13 @@ from typing import List, Optional, Tuple, Union
 
 import torch as pt
 from datasets import DatasetDict, concatenate_datasets
+from neural_collapse.util import hashify
 from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, PreTrainedModel
 
+from lib.accumulate import CollapseStatistics
 from lib.collapse import Statistics
 from lib.model import ModelArguments, strip_model
 
@@ -117,7 +119,7 @@ def collect_embeddings(
     model_args: ModelArguments,
     model: AutoModelForCausalLM,
     datasets: DatasetDict,
-):
+) -> int:
     """Collection function for any stage (means/vars/decs).
     args: Collection arguments supplied from top-level script.
     model_args: Model/training arguments supplied from top-level script.
@@ -158,17 +160,18 @@ def collect_embeddings(
     N_batches = int(math.ceil(N_seqs / args.batch_size))
 
     C, D, model, W = strip_model(model, args.device)
-    stats = Statistics(C, D, args.device)
+    stats = CollapseStatistics(C, D, args.device)
 
     N_seen = 0
     if args.stage == "means":  # first pass
-        N_seen = stats.load_totals(means_path)
+        N_seen = stats.load_mean_totals(means_path)
     elif args.stage == "vars":  # second pass
-        stats.load_totals(means_path)
-        N_seen = stats.load_var_sums(vars_path)
+        N_seen = stats.load_vars_totals(vars_path)
     elif args.stage == "decs":
-        stats.load_totals(means_path)
-        N_seen = stats.load_decs(decs_path)
+        N_seen = stats.load_decs_totals(decs_path)
+    else:
+        print("W: invalid stage detected, aborting!")
+        return N_seen
 
     N_batches_seen = int(math.ceil(N_seen / args.batch_size))
     if N_seen > 0:
@@ -180,28 +183,30 @@ def collect_embeddings(
         batch = [extract(i) for i in range(start, end)]
         X, Y = process_batch(model, batch, args.device)
         if args.stage == "means":  # first pass
-            stats.collect_means(X, Y, len(batch))
+            _, _ = stats.collect_mean_totals(X, Y, len(batch))
         elif args.stage == "vars":  # second pass
-            stats.collect_vars(X, Y, len(batch))
+            _, _ = stats.collect_vars_totals(X, Y, len(batch))
         elif args.stage == "decs":  # third pass
-            stats.collect_decs(X, Y, W, len(batch))
-
+            _, _ = stats.collect_decs_hits(X, Y, W, len(batch))
         if (b_idx + 1) % (args.save_every // args.batch_size) != 0:
             continue  # don't save on most iterations
 
         if args.stage == "means":
-            stats.save_totals(means_path, args.verbose)
+            stats.save_mean_totals(means_path, args.verbose)
         elif args.stage == "vars":
-            stats.save_var_sums(vars_path, args.verbose)
+            stats.save_vars_totals(vars_path, args.verbose)
         elif args.stage == "decs":
-            stats.save_decs(decs_path, args.verbose)
+            stats.save_decs_totals(decs_path, args.verbose)
 
         if args.single:
+            print("only saving once (for debugging purposes)")
             break
 
     if args.stage == "means":
-        stats.save_totals(means_path, args.verbose)
+        stats.save_mean_totals(means_path, args.verbose)
     elif args.stage == "vars":
-        stats.save_var_sums(vars_path, args.verbose)
+        stats.save_vars_totals(vars_path, args.verbose)
     elif args.stage == "decs":
-        stats.save_decs(decs_path, args.verbose)
+        stats.save_decs_totals(decs_path, args.verbose)
+
+    return N_seen

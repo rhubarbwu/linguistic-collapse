@@ -257,7 +257,7 @@ def main():
         args=train_args,
         train_dataset=train_dataset if train_args.do_train else None,
         eval_dataset=eval_dataset if train_args.do_eval else None,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         # Data collator will default to DataCollatorWithPadding, so we change it.
         data_collator=default_data_collator,
         compute_metrics=(

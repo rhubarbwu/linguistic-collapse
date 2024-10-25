@@ -1,244 +1,88 @@
 import os
-from hashlib import sha256
-from typing import List, Tuple, Union
+from typing import Tuple, Union
 
 import torch as pt
-from neural_collapse.kernels import class_dist_norm_var
+from neural_collapse.accumulate import (DecAccumulator, MeanAccumulator,
+                                        VarNormAccumulator)
+from neural_collapse.util import hashify
 from torch import Tensor
 
-from lib.utils import select_int_type
 
-
-class Statistics:
+class CollapseStatistics:
     def __init__(
         self,
         C: int = None,
         D: int = None,
         device: Union[str, pt.device] = "cpu",
         dtype: pt.dtype = float,
-        load_means: str = None,
-        load_vars: str = None,
-        load_decs: str = None,
+        means_path: str = None,
+        vars_path: str = None,
+        decs_path: str = None,
         verbose: bool = True,
     ):
-        """
-        C: number of classes
-        D: dimension of embeddings
-        device: which processor to put the tensors on
-        dtype: floating point precision
-        load_means: file from which to load a means checkpoint
-        load_vars: file from which to load a covariances checkpoint
-        """
-
-        self.C, self.D = C, D
         self.device = device
         self.dtype, self.eps = dtype, pt.finfo(dtype).eps
-        self.hash = None  # ensuring covariances based on consistent means
+        self.means_hash = None  # ensuring covariances based on consistent means
 
-        if load_means:
-            self.load_totals(load_means, verbose)
-        if load_vars:
-            self.load_var_sums(load_vars, verbose)
-        if load_decs:
-            self.load_decs(load_decs, verbose)
+        if means_path:
+            self.load_mean_totals(means_path, verbose)
+            assert type(self.means_accum) == MeanAccumulator
+        else:
+            assert type(C) == type(D) == int
+            self.C, self.D = C, D
+            self.means_accum = MeanAccumulator(C, D, device, dtype)
+            self.N_seqs_means = 0
 
-        self.ctype = select_int_type(self.C)
-        if load_means and load_vars and load_decs:
-            return
+        self.vars_accum = VarNormAccumulator(self.C, self.D, device, dtype)
+        if vars_path:
+            self.load_vars_totals(vars_path, verbose)
+        else:
+            self.N_seqs_vars = 0
 
-        if not load_means:
-            self.N1, self.N1_seqs = 0, 0  # counts of samples/sequences for means pass
-            self.counts = pt.zeros(self.C, dtype=pt.int32).to(device)
-            self.totals = pt.zeros(self.C, self.D, dtype=dtype).to(device)
+        self.decs_accum = DecAccumulator(self.C, self.D, device)
+        if decs_path:
+            self.load_decs_totals(decs_path)
+        else:
+            self.N_seqs_decs = 0
 
-        if not load_vars:
-            self.N2, self.N2_seqs = 0, 0  # counts of samples/sequences for vars pass
-            self.var_sums = pt.zeros(self.C, dtype=dtype).to(device)
-
-        if not load_decs:
-            self.N3 = 0
-            self.N3_seqs = 0
-            self.matches = pt.zeros(self.C, dtype=pt.int32).to(device)
-            self.misses = pt.zeros(self.C, dtype=pt.int32).to(device)
-
-    def move_to(self, device: str = "cpu"):
-        self.counts = self.counts.to(device)
-        self.totals = self.counts.to(device)
-        self.var_sums = self.var_sums.to(device)
-
-    def counts_in_range(self, minimum: int = 0, maximum: int = None):
-        idxs = self.counts.squeeze() >= minimum
-        assert pt.all(minimum <= self.counts[idxs])
-        if maximum:
-            idxs &= self.counts.squeeze() < maximum
-            assert pt.all(self.counts[idxs] < maximum)
-
-        filtered = idxs.nonzero().squeeze()
-
-        return filtered
-
-    def collect_means(self, X: Tensor, Y: Tensor, B: int = 1) -> Tuple[Tensor, Tensor]:
+    # methods for collecting/saving/loading means
+    def collect_mean_totals(
+        self, X: Tensor, Y: Tensor, n_seqs: int = 1
+    ) -> Tuple[Tensor, Tensor]:
         """First pass: increment vector counts and totals for a batch.
         B: batch size
         X (B x D): feature vectors
         Y (B x 1): class labels
         """
-
         if len(Y.shape) < 1:
             print("WARN: batch too short")
             return None, None
-        if len(Y.shape) > 1:
-            Y = pt.squeeze(Y)
-        Y = Y.to(self.ctype)
+        self.N_seqs_means += n_seqs
 
-        assert X.shape[0] == Y.shape[0]
-        self.N1 += Y.shape[0]
-        self.N1_seqs += B
+        return self.means_accum.accumulate(X, Y)
 
-        label_range = pt.arange(self.C, dtype=self.ctype)
-        idxs = Y[:, None] == label_range.to(Y.device)
-        X, idxs = X.to(self.device), idxs.to(self.device)
-
-        self.counts += pt.sum(idxs, dim=0, dtype=self.ctype)[:, None].squeeze()  # C
-        self.totals += pt.matmul(idxs.mT.to(self.dtype), X.to(self.dtype))  # C x D
-
-        return self.counts, self.totals
-
-    def collect_vars(self, X: Tensor, Y: Tensor, B: int = 1) -> Tuple[Tensor, Tensor]:
-        """Second pass: increment within/between-class covariance for a batch.
-        B: batch size
-        X (B x D): feature vectors
-        Y (B x 1): class labels
-        """
-
-        assert X.shape[-1] == self.D
-        assert X.shape[0] == Y.shape[0]
-
-        means, _ = self.compute_means()  # C x D
-
-        if self.N2 + Y.shape[0] > self.N1:
-            print("  W: this batch would exceed means samples")
-            print(f"  {self.N2}+{Y.shape[0]} > {self.N1}")
-        self.N2 += Y.shape[0]
-        self.N2_seqs += B
-
-        diffs = X.to(self.device) - means[Y]
-        Y = Y.to(self.device).to(pt.int64)
-        self.var_sums.scatter_add_(0, Y, pt.sum(diffs * diffs, dim=-1))
-
-        return self.var_sums
-
-    def collect_decs(
-        self, X: Tensor, Y: Tensor, W: Tensor, B: int = 1
-    ) -> Tuple[Tensor, Tensor]:
-        """Third pass: increment samples where near-class and model classifiers agree.
-        B: batch size
-        X (B x D): feature vectors
-        Y (B x 1): class labels
-        W (C x D): model classifier weights
-        """
-
-        means, _ = self.compute_means()  # C x D
-        idxs = self.counts_in_range(1)
-        means, W = means[idxs], W[idxs]
-
-        if self.N3 + Y.shape[0] > self.N1:
-            print("  W: this batch would exceed means samples")
-            print(f"  {self.N3}+{Y.shape[0]} > {self.N1}")
-        self.N3 += Y.shape[0]
-        self.N3_seqs += B
-
-        # linear predictions
-        pred_lin = (X @ W.mT).argmax(dim=-1)  # B
-
-        # NCC predictions decomposed
-        dots = pt.inner(X, means)  # B x C
-        features = pt.norm(X, dim=-1) ** 2  # B x 1
-        centres = pt.norm(means, dim=-1) ** 2  # 1 x C
-        dists = features.unsqueeze(1) + centres.unsqueeze(0) - 2 * dots  # B x C
-        pred_ncc = dists.argmin(dim=-1)  # B
-
-        # count matches and misses between classifiers
-        matches = (pred_lin == pred_ncc).to(pt.int32)  # B
-
-        # increment matches/misses to label classes
-        Y = Y.to(self.device).to(pt.int64)
-        self.matches.scatter_add_(0, Y, matches)
-        self.misses.scatter_add_(0, Y, (1 - matches))
-
-        return self.matches.sum(), self.misses.sum()
-
-    def compute_means(
-        self, idxs: List[int] = None, weighted: bool = False
-    ) -> Tuple[Tensor, Tensor]:
-        """Compute and store the overall means of the dataset.
-        idxs: classes to select for subsampled computation.
-        weighted: whether to use the global mean (True) as opposed to the
-            unweighted average mean (False).
-        """
-
-        counts = (self.counts if idxs is None else self.counts[idxs]).unsqueeze(-1)
-        N = counts.sum()
-        if idxs is None:
-            assert N == self.N1
-
-        totals = self.totals if idxs is None else self.totals[idxs]
-        mean = totals / (counts + self.eps).to(self.dtype)  # C' x D
-        if weighted:
-            mean_G = counts.T.to(self.dtype) @ mean / (N + self.eps)  # D
-        else:
-            mean_G = mean.mean(dim=0)
-
-        self.hash = sha256(mean.cpu().numpy().tobytes()).hexdigest()
-
-        return mean, mean_G
-
-    def compute_vars(
-        self,
-        idxs: List[int] = None,
-        tile_size: int = 1,
-    ) -> Tensor:
-        """Compute the overall covariances of the dataset.
-        idxs: classes to select for subsampled computation.
-        """
-
-        if self.N1 != self.N2 or self.N1_seqs != self.N2_seqs:
-            return None
-
-        means, _ = self.compute_means(idxs)
-        counts, var_sums = self.counts, self.var_sums
-        if idxs is not None:
-            counts, var_sums = counts[idxs], var_sums[idxs]
-        vars_normed = var_sums / counts
-
-        CDNVs = class_dist_norm_var(vars_normed, means, 2, tile_size)
-        return CDNVs
-
-    ## SAVING AND LOADING ##
-
-    def save_totals(self, file: str, verbose: bool = False) -> str:
+    def save_mean_totals(self, file: str, verbose: bool = False) -> str:
         """Save totals (used with counts for computing means).
         file: path to save totals data.
         verbose: logging flag.
         """
-        self.compute_means()
+        self.means_hash = hashify(self.means_accum.compute()[0])
+
         data = {
-            "hash": self.hash,
-            "C": self.C,
-            "D": self.D,
-            "N": self.N1,
-            "N_seqs": self.N1_seqs,
-            "counts": self.counts,
-            "totals": self.totals,
+            "hash": self.means_hash,
+            "N_seqs": self.N_seqs_means,
+            "Ns_toks": self.means_accum.ns_samples,
+            "totals": self.means_accum.totals,
         }
         pt.save(data, file)
 
         if verbose:
-            print(f"SAVED means to {file}; {self.N1} in {self.N1_seqs} seqs")
-            print(f"  HASH: {self.hash}")
+            N_seqs, N_toks = self.N_seqs_means, self.means_accum.ns_samples.sum().item()
+            print(f"SAVED means to {file}; {N_toks} in {N_seqs} seqs")
+            print(f"  HASH: {self.means_hash}")
         return file
 
-    def load_totals(self, file: str, verbose: bool = True) -> int:
+    def load_mean_totals(self, file: str, verbose: bool = False) -> int:
         """Load totals (used with counts for computing means).
         file: path to load totals data.
         verbose: logging flag.
@@ -246,120 +90,168 @@ class Statistics:
         if not os.path.isfile(file):
             print(f"  W: file {file} not found; need to collect means from scratch")
             return 0
-
         data = pt.load(file, self.device, weights_only=True)
-        assert self.hash in [None, data["hash"]], "overwriting current data"
-        self.hash = data["hash"]
 
-        self.C, self.D = data["C"], data["D"]
-        self.N1 = data["N"]
-        self.N1_seqs = data["N_seqs"]
-        self.counts = data["counts"].to(self.device).squeeze()
-        self.totals = data["totals"].to(self.device)
+        assert self.means_hash in [None, data["hash"]], "overwriting current data"
+        self.means_hash, self.N_seqs_means = data["hash"], data["N_seqs"]
+        Ns_toks = data["Ns_toks"].to(self.device).squeeze()
+        totals = data["totals"].to(self.device)
+
+        self.C, self.D = totals.shape
+        assert Ns_toks.shape[0] == self.C
+        self.means_accum = MeanAccumulator(self.C, self.D, self.device, self.dtype)
+        self.means_accum.ns_samples, self.means_accum.totals = Ns_toks, totals
 
         if verbose:
-            print(f"LOADED means from {file}; {self.N1} in {self.N1_seqs} seqs")
-        return self.N1_seqs
+            N_toks = Ns_toks.sum().item()
+            print(f"LOADED means from {file}; {N_toks} in {self.N_seqs_means} seqs")
+        return self.N_seqs_means
 
-    def save_var_sums(self, file: str, verbose: bool = False) -> str:
-        """Save variance sums (used with counts for normalized variances).
+    # methods for collecting/saving/loading variance norms
+    def collect_vars_totals(self, X: Tensor, Y: Tensor, n_seqs: int = 1) -> Tensor:
+        """Second pass: increment within/between-class covariance for a batch.
+        B: batch size
+        X (B x D): feature vectors
+        Y (B x 1): class labels
+        """
+        if len(Y.shape) < 1:
+            print("WARN: batch too short")
+            return None, None
+        N_means = self.means_accum.ns_samples.sum().item()
+        N_vars = self.vars_accum.ns_samples.sum().item()
+        if N_vars + Y.shape[0] > N_means:
+            print("  W: this vars batch would exceed means samples")
+            print(f"  {N_vars}+{Y.shape[0]} > {N_means}")
+            return None, None
+        self.N_seqs_vars += n_seqs
+
+        M = self.means_accum.compute()[0]
+        return self.vars_accum.accumulate(X, Y, M)
+
+    def save_vars_totals(self, file: str, verbose: bool = False) -> str:
+        """Save variance norm totals (used with counts for normalized variances).
         file: path to save variance sums data.
         verbose: logging flag.
         """
         data = {
-            "hash": self.hash,
-            "C": self.C,
-            "D": self.D,
-            "N": self.N2,
-            "N_seqs": self.N2_seqs,
-            "var_sums": self.var_sums,
+            "hash": self.means_hash,
+            "N_seqs": self.N_seqs_vars,
+            "Ns_toks": self.vars_accum.ns_samples,
+            "totals": self.vars_accum.totals,
         }
         pt.save(data, file)
 
         if verbose:
-            print(f"SAVED vars to {file}; {self.N2} in {self.N2_seqs} seqs")
-            print(f"  MEANS HASH: {self.hash}")
+            N_seqs, N_toks = self.N_seqs_vars, self.vars_accum.ns_samples.sum().item()
+            print(f"SAVED vars to {file}; {N_toks} in {N_seqs} seqs")
+            print(f"  MEANS HASH: {self.means_hash}")
         return file
 
-    def load_var_sums(self, file: str, verbose: bool = True) -> int:
+    def load_vars_totals(self, file: str, verbose: bool = False) -> int:
         """Load variance sums (used with counts for normalized variances).
         file: path to load variance sums data.
         verbose: logging flag.
         """
         means_file = file.replace("vars", "means")
-        if not self.load_totals(means_file, False):
+        if not self.load_mean_totals(means_file, False):
             print("  W: means not found; please collect them first")
             return 0
+        self.C, self.D = self.means_accum.n_classes, self.means_accum.d_vectors
 
         if not os.path.isfile(file):
             print(f"  W: path {file} not found; need to collect vars from scratch")
             return 0
 
         data = pt.load(file, self.device, weights_only=True)
-        assert self.hash in [
+        assert self.means_hash in [
             None,
             data["hash"],
-        ], f"vars based on outdated means: {self.hash[:6]} != {data['hash'][:6]}"
-        self.hash = data["hash"]
+        ], f"vars based on outdated means: {self.means_hash[:6]} != {data['hash'][:6]}"
+        self.vars_accum.hash_M = self.means_hash = data["hash"]
 
-        self.C, self.D = data["C"], data["D"]
-        self.N2 = data["N"]
-        self.N2_seqs = data["N_seqs"]
-        self.var_sums = data["var_sums"].to(self.device)
+        self.N_seqs_vars = data["N_seqs"]
+        self.vars_accum.ns_samples = data["Ns_toks"].to(self.device)
+        self.vars_accum.totals = data["totals"].to(self.device)
+        assert len(self.vars_accum.ns_samples) == len(self.vars_accum.totals) == self.C
 
         if verbose:
-            print(f"LOADED vars from {file}; {self.N2} in {self.N2_seqs} seqs")
-        return self.N2_seqs
+            N_toks = self.vars_accum.ns_samples.sum().item()
+            print(f"LOADED vars from {file}; {N_toks} in {self.N_seqs_vars} seqs")
+        return self.N_seqs_vars
 
-    def save_decs(self, file: str, verbose: bool = False) -> str:
+    # methods for collecting/saving/loading decision agreements
+    def collect_decs_hits(
+        self, X: Tensor, Y: Tensor, W: Tensor, n_seqs: int = 1
+    ) -> Tuple[Tensor, Tensor]:
+        """Third pass: increment samples where near-class and model classifiers agree.
+        B: batch size
+        X (B x D): feature vectors
+        Y (B x 1): class labels
+        W (C x D): model classifier weights
+        """
+        if len(Y.shape) < 1:
+            print("WARN: batch too short")
+            return None, None
+        N_means = self.means_accum.ns_samples.sum().item()
+        N_decs = self.decs_accum.ns_samples.sum().item()
+        if N_decs + Y.shape[0] > N_means:
+            print("  W: this decs batch would exceed means samples")
+            print(f"  {N_decs}+{Y.shape[0]} > {N_means}")
+            return None, None
+        self.N_seqs_decs += n_seqs
+
+        M = None
+        if self.decs_accum.index is None:
+            M = self.means_accum.compute()[0]
+        return self.decs_accum.accumulate(X, Y, W, M)
+
+    def save_decs_totals(self, file: str, verbose: bool = False) -> str:
         """Save decision matches/misses.
         file: path to save decision counts.
         verbose: logging flag.
         """
         data = {
-            "hash": self.hash,
-            "C": self.C,
-            "D": self.D,
-            "N": self.N3,
-            "N_seqs": self.N3_seqs,
-            "matches": self.matches,
-            "misses": self.misses,
+            "hash": self.means_hash,
+            "N_seqs": self.N_seqs_decs,
+            "Ns_toks": self.decs_accum.ns_samples,
+            "totals": self.decs_accum.totals,
         }
         pt.save(data, file)
 
         if verbose:
-            print(f"SAVED vars to {file}; {self.N3} in {self.N3_seqs} seqs")
-            print(f"  MEANS HASH: {self.hash}")
+            N_seqs, N_toks = self.N_seqs_decs, self.decs_accum.ns_samples.sum().item()
+            print(f"SAVED decs to {file}; {N_toks} in {N_seqs} seqs")
+            print(f"  MEANS HASH: {self.means_hash}")
         return file
 
-    def load_decs(self, file: str, verbose: bool = True) -> int:
+    def load_decs_totals(self, file: str, verbose: bool = False) -> int:
         """Load decision matches/misses.
         file: path to load decision counts.
         verbose: logging flag.
         """
         means_file = file.replace("decs", "means")
-        if not self.load_totals(means_file, False):
+        if not self.load_mean_totals(means_file, False):
             print("  W: means not found; please collect them first")
             return 0
+        self.C, self.D = self.means_accum.n_classes, self.means_accum.d_vectors
 
         if not os.path.isfile(file):
             print(f"  W: path {file} not found; need to collect decs from scratch")
             return 0
 
         data = pt.load(file, self.device, weights_only=True)
-        assert self.hash in [
+        assert self.means_hash in [
             None,
             data["hash"],
-        ], f"decs based on outdated means: {self.hash[:6]} != {data['hash'][:6]}"
-        self.hash = data["hash"]
+        ], f"decs based on outdated means: {self.means_hash[:6]} != {data['hash'][:6]}"
+        self.decs_accum.hash_M = self.means_hash = data["hash"]
 
-        self.C, self.D = data["C"], data["D"]
-        self.N3 = data["N"]
-        self.N3_seqs = data["N_seqs"]
-        self.matches = data["matches"]
-        self.misses = data["misses"]
+        self.N_seqs_decs = data["N_seqs"]
+        self.decs_accum.ns_samples = data["Ns_toks"].to(self.device)
+        self.decs_accum.totals = data["totals"].to(self.device)
+        assert len(self.decs_accum.ns_samples) == len(self.decs_accum.totals) == self.C
 
         if verbose:
-            print(f"LOADED decs from {file}; {self.N3} in {self.N3_seqs} seqs")
-
-        return self.N3_seqs
+            N_toks = self.decs_accum.ns_samples.sum().item()
+            print(f"LOADED decs from {file}; {N_toks} in {self.N_seqs_decs} seqs")
+        return self.N_seqs_decs

@@ -22,8 +22,13 @@ def create_df(path: str) -> DataFrame:
     if not path.endswith(".csv"):
         path = f"{path}.csv"
     if exists(path):
-        return read_csv(path, index_col="model")
-    return DataFrame(index=Index([], name="model"))
+        df = read_csv(path, index_col="model")
+    else:
+        df = DataFrame(index=Index([], name="model"))
+    for col in df.columns:
+        if (df[col].fillna(0) % 1 == 0).all():
+            df[col] = df[col].fillna(0).astype(int)
+    return df
 
 
 def update_df(df: DataFrame, metric: str, new_val: Any, entry: str):
@@ -95,7 +100,7 @@ def triu_stats(data: Tensor) -> Tuple[float, float, float]:
     return mean, var, std
 
 
-def save_stats(
+def save_metrics(
     df: DataFrame,
     data: Tensor,
     key: str,

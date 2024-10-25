@@ -113,7 +113,7 @@ esac
 | Agreement ($\mathcal{NC}4$)                  | `-decs`     | means, decisions   |
 | Generalization (and other model info)        | `-loss`     | checkpoints        |
 
-If all goes well, a CSV-formatted dataframe should be generated.
+If all goes well, a CSV-formatted dataframe should be generated. See [./artifacts/](./artifacts/) for time-stamped examples.
 
 ### Visualizations
 

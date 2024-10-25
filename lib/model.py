@@ -35,7 +35,7 @@ class ModelArguments:
         },
     )
     model_type: Optional[str] = field(
-        default=None,
+        default="gpt_neo",
         metadata={
             "help": "If training from scratch, pass a model type from the list: "
             + ", ".join(MODEL_TYPES)

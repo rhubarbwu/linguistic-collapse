@@ -19,6 +19,7 @@ OUTPUT=lc-2024_10_16 # useful for timestamping results
 case $ENV in
 ALL)
     analyze -loss -dual -etf -kern log -snr -decs -nor -o $OUTPUT -i $FILES -ts 512 -f
+    ;;
 GPU)
     analyze -etf -kern log -snr -o $OUTPUT -i $FILES -ts 512 -f
     ;;
