@@ -48,7 +48,6 @@ parser.add_argument("-kern", "--kernel", type=str, default=None)  # GNC2
 parser.add_argument("-dual", "--duality", action="store_true")  # NC3
 parser.add_argument("-decs", "--decisions", action="store_true")  # NC4
 parser.add_argument("-each", "--each_model", action="store_true")
-parser.add_argument("-freq", "--frequency", action="store_true")
 
 parser.add_argument("-mpc", "--min_per_class", type=int, default=1)
 parser.add_argument("-Mpc", "--max_per_class", type=int, default=None)
@@ -89,9 +88,9 @@ for file in sorted(args.input_files, key=lambda x: x.split("/")[-1]):
         break
 
 
-def get_stats(iden):
+def get_stats(iden: str, force_cpu: bool = False):
     stats = CollapseStatistics(
-        device=args.device,
+        device="cpu" if force_cpu else args.device,
         means_path=PATHS[iden][0],
         vars_path=PATHS[iden][1],
         decs_path=PATHS[iden][2],
@@ -105,7 +104,7 @@ if args.progress:
 
 
 for iden in tqdm(PATHS):
-    nc_stats: CollapseStatistics = get_stats(iden)
+    nc_stats: CollapseStatistics = get_stats(iden, True)
 
     if args.progress:
         N_unique = nc_stats.means_accum.filter_indices_by_n_samples(mpc, Mpc).shape[0]
@@ -191,8 +190,10 @@ for iden in tqdm(IDENTIFIERS):
     if args.norms and missing("norms_var", iden):  # NC2 equinorm
         norms = mean_norms(M, mG)
         save_metrics(df, norms, "norms", iden)
-        if args.frequency:
-            commit(args.output_file, "norms", norms, iden)
+        del norms
+    if args.norms and missing("norms_log_var", iden):  # NC2 equinorm (log)
+        norms = mean_norms(M, mG, [pt.log])
+        save_metrics(df, norms, "norms_log", iden)
         del norms
 
     if args.interfere and missing("interfere_var", iden):  # NC2 simplex ETF
