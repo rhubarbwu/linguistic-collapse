@@ -1,6 +1,6 @@
-# Linguistic Collapse: Neural Collapse in (Large) Language Models
+# Linguistic Collapse: Neural Collapse in (Large) Language Models [NeurIPS 2024]
 
-Codebase for [arXiv:2405.17767](https://arxiv.org/abs/2405.17767), based on [GPT-Neo](https://github.com/EleutherAI/gpt-neo) and [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories).
+Codebase for _Linguistic Collapse: Neural Collapse in (Large) Language Models_ ([NeurIPS 2024](https://proceedings.neurips.cc/paper_files/paper/2024/hash/f88cc8930b47a45ec4733123bf3039b9-Abstract-Conference.html), [arXiv:2405.17767](https://arxiv.org/abs/2405.17767)), leveraging [`neural-collapse`](https://github.com/rhubarbwu/neural-collapse/), [GPT-Neo](https://github.com/EleutherAI/gpt-neo) and [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories).
 
 ## Environment
 
@@ -129,13 +129,15 @@ If there are any bugs or inefficiences in our code, or any other questions, we'd
 ## Citing
 
 ```tex
-@misc{wu2024linguisticcollapse,
-      title={Linguistic Collapse: Neural Collapse in (Large) Language Models},
-      author={Robert Wu and Vardan Papyan},
-      year={2024},
-      eprint={2405.17767},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2405.17767},
+@inproceedings{NEURIPS2024_f88cc893,
+    author = {Wu, Robert and Papyan, Vardan},
+    booktitle = {Advances in Neural Information Processing Systems},
+    editor = {A. Globerson and L. Mackey and D. Belgrave and A. Fan and U. Paquet and J. Tomczak and C. Zhang},
+    pages = {137432--137473},
+    publisher = {Curran Associates, Inc.},
+    title = {Linguistic Collapse: Neural Collapse in (Large) Language Models},
+    url = {https://proceedings.neurips.cc/paper_files/paper/2024/file/f88cc8930b47a45ec4733123bf3039b9-Paper-Conference.pdf},
+    volume = {37},
+    year = {2024}
 }
 ```
